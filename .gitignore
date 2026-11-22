@@ -1,0 +1,12 @@
+.notesflow/
+notesflow.json
+/notesflow
+/bin/
+.env
+.env.*
+.DS_Store
+*.aux
+*.fdb_latexmk
+*.fls
+*.log
+*.synctex.gz

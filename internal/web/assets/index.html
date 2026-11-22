@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/style.css">
+  <script defer src="/graph.js"></script>
+  <title>Notesflow · Grafo della conoscenza</title>
+</head>
+<body>
+  <header class="app-header">
+    <div class="wordmark"><span class="brand-icon" aria-hidden="true">✳</span> Notesflow</div>
+    <div class="connection"><span id="live-light"></span><span id="live">Connessione…</span></div>
+  </header>
+  <main class="shell">
+    <section class="heading">
+      <div><h1>Grafo della conoscenza</h1><p id="metrics" aria-live="polite">Attendo l’indice del workspace…</p></div>
+      <button id="reset" type="button">Inquadra grafo</button>
+    </section>
+    <div class="layout">
+      <section class="viewport" aria-label="Grafo interattivo">
+        <canvas id="canvas" aria-label="Trascina i nodi o lo sfondo, usa la rotella per lo zoom"></canvas>
+        <p id="empty" hidden></p>
+        <div class="legend" aria-label="Legenda">
+          <span><i class="line explicit"></i> LaTeX</span>
+          <span><i class="line semantic"></i> Semantico</span>
+          <span><i class="line hierarchy"></i> Gerarchia</span>
+        </div>
+        <div class="zoom" aria-label="Zoom">
+          <button id="zoom-out" type="button" aria-label="Riduci zoom">−</button>
+          <output id="zoom-level">100%</output>
+          <button id="zoom-in" type="button" aria-label="Aumenta zoom">+</button>
+        </div>
+        <div id="courses" class="courses" aria-label="Corsi"></div>
+      </section>
+      <aside class="inspector" aria-label="Ricerca e dettagli">
+        <section class="controls">
+          <label for="search">Cerca un nodo</label>
+          <input id="search" type="search" placeholder="Titolo, corso o file" autocomplete="off">
+          <div id="results" class="results" hidden></div>
+          <fieldset>
+            <legend>Collegamenti</legend>
+            <label><input type="checkbox" data-kind="explicit" checked> LaTeX</label>
+            <label><input type="checkbox" data-kind="semantic" checked> Semantici</label>
+            <label><input type="checkbox" data-kind="hierarchy" checked> Gerarchia</label>
+          </fieldset>
+        </section>
+        <section id="details" class="details">
+          <h2>Dettagli nodo</h2>
+          <p>Seleziona un nodo per leggere l’anteprima e vedere i collegamenti.</p>
+        </section>
+      </aside>
+    </div>
+  </main>
+</body>
+</html>
