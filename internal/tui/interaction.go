@@ -62,10 +62,14 @@ type dragState struct {
 
 func (m *Model) mouse(event tea.MouseEvent) tea.Cmd {
 	click := event.Button == tea.MouseButtonLeft && event.Action == tea.MouseActionPress
-	if m.form.mode != "" || len(m.choice.options) > 0 {
+	if m.quitting {
 		return nil
 	}
+	l := m.layout()
 	if click {
+		if m.quitButton(l).contains(event.X, event.Y) {
+			return m.quit()
+		}
 		if m.noticeRect().contains(event.X, event.Y) {
 			return m.openAgentActivity(m.agents.notice.id)
 		}
@@ -82,7 +86,9 @@ func (m *Model) mouse(event tea.MouseEvent) tea.Cmd {
 	if m.tab == graphTab && event.Action == tea.MouseActionMotion {
 		m.graphHover = ""
 	}
-	l := m.layout()
+	if m.formOpen() || m.workspacePickerOpen() {
+		return nil
+	}
 	main := cellRect{1, l.header + 1, l.left - 2, l.body - 2}
 	if m.tab == editorTab && m.editor != nil && main.contains(event.X, event.Y) {
 		if click {

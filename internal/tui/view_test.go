@@ -43,7 +43,7 @@ func TestCourseHomeKeepsPreviewRoadmapAndShortcutsInFrame(t *testing.T) {
 	}
 	model.width, model.height = 120, 42
 	view := ansi.Strip(model.View())
-	for _, marker := range []string{"1 Home", "2 Scrittura", "3 Grafo", "Riprendi", "Nuovo capitolo", "Delega", "Capitoli", "R Mostra/nascondi", "TODO · 2", "Anteprima PDF", "Roadmap · 1/2", "─▶"} {
+	for _, marker := range []string{"1 Home", "2 Scrittura", "3 Grafo", "Riprendi", "Nuovo capitolo", "Delega", "Capitoli", "Shift+Tab → q Esci", "TODO · 2", "Anteprima PDF", "Roadmap · 1/2", "─▶"} {
 		if !strings.Contains(view, marker) {
 			t.Errorf("view does not contain %q", marker)
 		}
@@ -184,5 +184,56 @@ func TestCompactFooterOnlyRoadmapSegmentTogglesRoadmap(t *testing.T) {
 	model.mouse(click)
 	if model.roadCollapsed {
 		t.Fatal("clicking the roadmap segment did not expand it")
+	}
+}
+
+func TestShiftTabAndQuitAreAvailableAcrossPanes(t *testing.T) {
+	cases := map[string]Model{
+		"home":             {tab: homeTab},
+		"scrittura":        {tab: editorTab},
+		"pdf":              {tab: editorTab, focus: pdfFocus},
+		"todo laterali":    {tab: homeTab, focus: sidebarFocus},
+		"roadmap":          {tab: homeTab, focus: roadFocus},
+		"ricerca grafo":    {tab: graphTab, graphSearch: true, query: "sequenze"},
+		"modulo delega":    {tab: homeTab, form: inputForm{mode: "delegate", text: "Una bozza"}},
+		"scelta documento": {tab: homeTab, choice: workspaceChoice{options: []string{"main.tex"}}},
+	}
+	for name, original := range cases {
+		t.Run(name, func(t *testing.T) {
+			event := tea.KeyMsg{Type: tea.KeyShiftTab}
+			model, _ := original.key(event)
+			model, _ = model.key(event)
+			if !model.commandMode || model.tab != original.tab || model.navTab != original.tab {
+				t.Fatal("Shift+Tab should focus navigation without switching tabs")
+			}
+			model, _ = model.key(tea.KeyMsg{Type: tea.KeyTab})
+			if model.commandMode || model.focus != original.focus || model.form.text != original.form.text || model.query != original.query {
+				t.Fatal("Tab should return to the same pane and text")
+			}
+			model, _ = model.key(event)
+			model, cmd := model.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+			if cmd == nil || !model.quitting {
+				t.Fatal("q should request exit from global navigation")
+			}
+			if _, ok := cmd().(tea.QuitMsg); !ok {
+				t.Fatal("a workspace without an editor should exit")
+			}
+		})
+	}
+}
+
+func TestNavigationPreservesDraftWhenSwitchingTabs(t *testing.T) {
+	model := Model{tab: homeTab, course: rootCourse, form: inputForm{
+		mode: "delegate", tab: homeTab, course: rootCourse, field: 1, text: "Spiega i container",
+	}}
+	model, _ = model.key(tea.KeyMsg{Type: tea.KeyShiftTab})
+	model, _ = model.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("5")})
+	if model.tab != activityTab || model.formOpen() {
+		t.Fatal("navigation should open Activity in its own pane")
+	}
+	model, _ = model.key(tea.KeyMsg{Type: tea.KeyShiftTab})
+	model, _ = model.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("1")})
+	if !model.formOpen() || model.form.text != "Spiega i container" || model.form.field != 1 {
+		t.Fatal("returning from Activity should restore the draft")
 	}
 }

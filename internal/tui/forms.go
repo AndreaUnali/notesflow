@@ -16,7 +16,8 @@ import (
 )
 
 type inputForm struct {
-	mode               string
+	mode, course       string
+	tab                int
 	field              int
 	job                int
 	targets            []agent.Target
@@ -31,12 +32,16 @@ type inputForm struct {
 	buffer, bufferFile string
 }
 
+func (m Model) formOpen() bool {
+	return m.form.mode != "" && m.form.tab == m.tab && m.form.course == m.course
+}
+
 func (m *Model) showAgentForm(mode string, id int, file string, line int) {
 	if m.agents.book == nil {
 		m.message = "Registro dell’agente non disponibile"
 		return
 	}
-	form := inputForm{mode: mode, job: id}
+	form := inputForm{mode: mode, job: id, tab: m.tab, course: m.course}
 	if mode == "chapter" {
 		m.form = form
 		return
@@ -166,17 +171,13 @@ func (m *Model) formKey(key tea.KeyMsg) tea.Cmd {
 		m.sourceInput(key)
 		return nil
 	}
-	if value == "tab" || value == "shift+tab" {
+	if value == "tab" {
 		first := 0
 		if form.job != 0 {
 			first = 1
 		}
 		size := 3 - first
-		shift := 1
-		if value == "shift+tab" {
-			shift = size - 1
-		}
-		form.field = first + (form.field-first+shift)%size
+		form.field = first + (form.field-first+1)%size
 		return nil
 	}
 	switch form.field {

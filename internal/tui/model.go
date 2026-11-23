@@ -289,9 +289,11 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 		m.quitting = false
 		m.savePosition(v.position)
 		if v.err != nil {
-			m.message = v.err.Error()
+			m.focusNavigation()
+			m.message = "Uscita sospesa · Neovim: " + v.err.Error() + " · q Riprova"
 		} else if v.unsaved {
-			m.message = "Modifiche non salvate · 2 torna alla scrittura · :wall salva"
+			m.focusNavigation()
+			m.message = "Modifiche non salvate · 2 Scrittura · :wall salva · Shift+Tab poi q"
 		} else {
 			return m, tea.Quit
 		}
@@ -309,13 +311,12 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 
 func (m Model) key(key tea.KeyMsg) (Model, tea.Cmd) {
 	s := key.String()
-	if m.form.mode != "" {
-		cmd := m.formKey(key)
-		return m, cmd
+	if m.quitting {
+		return m, nil
 	}
-	if len(m.choice.options) > 0 && !key.Paste {
-		cmd := m.workspaceKey(s)
-		return m, cmd
+	if !key.Paste && key.Type == tea.KeyShiftTab {
+		m.focusNavigation()
+		return m, nil
 	}
 	if m.commandMode {
 		if !key.Paste {
@@ -324,9 +325,18 @@ func (m Model) key(key tea.KeyMsg) (Model, tea.Cmd) {
 		}
 		m.commandMode = false
 	}
-	if !key.Paste && s == "shift+tab" && (m.tab == editorTab || m.focus != mainFocus) {
-		m.commandMode, m.navTab = true, min(m.tab, activityTab)
-		return m, nil
+	if m.formOpen() {
+		cmd := m.formKey(key)
+		return m, cmd
+	}
+	if m.workspacePickerOpen() && !key.Paste {
+		cmd := m.workspaceKey(s)
+		return m, cmd
+	}
+	if !key.Paste && (m.tab != editorTab || m.focus != mainFocus) && !m.graphSearch &&
+		(s == "q" || s == "ctrl+c") {
+		cmd := m.quit()
+		return m, cmd
 	}
 	if !key.Paste && m.focus == mainFocus && m.tab != editorTab && !m.graphSearch {
 		if cmd, ok := m.agentDetailKey(s); ok {
@@ -382,17 +392,6 @@ func (m Model) key(key tea.KeyMsg) (Model, tea.Cmd) {
 		return m, nil
 	}
 	switch s {
-	case "ctrl+c":
-		cmd := m.quit()
-		return m, cmd
-	case "tab", "shift+tab":
-		step := 1
-		if s == "shift+tab" {
-			step = visibleTabCount - 1
-		}
-		tab := (m.tab + step) % visibleTabCount
-		cmd := m.setTab(tab)
-		return m, cmd
 	case "down", "j", "up", "k", "pgdown", "pgup":
 		delta := 1
 		if s == "pgdown" || s == "pgup" {
@@ -464,6 +463,12 @@ func (m Model) key(key tea.KeyMsg) (Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *Model) focusNavigation() {
+	if !m.commandMode {
+		m.commandMode, m.navTab = true, min(m.tab, activityTab)
+	}
+}
+
 // navigate moves within the tab bar without sending keys to the active pane.
 func (m *Model) navigate(key string) tea.Cmd {
 	const count = visibleTabCount
@@ -474,7 +479,7 @@ func (m *Model) navigate(key string) tea.Cmd {
 		m.navTab = (m.navTab + 1) % count
 	case "enter":
 		return m.setTab(m.navTab)
-	case "tab", "shift+tab", "esc":
+	case "tab", "esc":
 		m.commandMode = false
 	default:
 		if cmd, ok := m.command(key); ok {
@@ -638,7 +643,7 @@ func (m *Model) activate() tea.Cmd {
 		case resumeNotes:
 			return m.setTab(editorTab)
 		case createChapter:
-			m.form = inputForm{mode: "chapter"}
+			m.form = inputForm{mode: "chapter", tab: m.tab, course: m.course}
 		case delegateNotes:
 			pos := m.savedPosition()
 			m.showAgentForm("delegate", 0, m.suggestedFile(), pos.Line)
@@ -715,20 +720,20 @@ func (m *Model) quit() tea.Cmd {
 	if m.quitting {
 		return nil
 	}
+	m.quitting = true
 	if m.editor == nil {
 		return tea.Quit
 	}
-	m.quitting = true
+	m.message = "Controllo delle modifiche in Neovim…"
 	e, ctx, course := m.editor, m.ctx, m.editorCourse
 	return func() tea.Msg {
+		state, err := e.ExitState(ctx)
 		select {
 		case <-e.Done():
 			return quitCheck{}
 		default:
 		}
-		changed, err := e.Unsaved(ctx)
-		pos, _ := e.Position(ctx)
-		return quitCheck{unsaved: changed, err: err, position: positionResult{editor: e, course: course, pos: pos}}
+		return quitCheck{unsaved: state.Unsaved, err: err, position: positionResult{editor: e, course: course, pos: state.Position}}
 	}
 }
 

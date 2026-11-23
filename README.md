@@ -1,42 +1,49 @@
-# Notesflow
+<h1 align="center">
+  <img src="docs/notesflow-wordmark.png" width="392" height="55" alt="Notesflow">
+</h1>
 
 Scrivi appunti LaTeX, controlla il PDF e segui i collegamenti tra i concetti dalla stessa sessione nel terminale. La home riunisce azioni, TODO, anteprima e roadmap. Il grafo e l’editor si aprono nella stessa interfaccia.
 
 ## Installa e prova
 
-Su macOS con Homebrew:
+Su macOS puoi installare le dipendenze con Homebrew.
 
 ```sh
-brew install go neovim poppler gh
-gh repo clone AndreaUnali/notesflow
+brew install go neovim poppler
+git clone https://github.com/AndreaUnali/notesflow.git
 cd notesflow
 go build -o notesflow ./cmd/notesflow
 ./notesflow --workspace examples/workspace/analisi
 ```
 
-Accedi con `gh auth login` se GitHub CLI lo richiede. Se ti manca `latexmk`, puoi installare MacTeX con `brew install --cask mactex-no-gui` e riaprire il terminale. Premi **b** per compilare l’esempio e popolare l’anteprima. Ghostty e Kitty mostrano il grafo e le pagine PDF a risoluzione grafica. Negli altri terminali puoi leggere il testo del PDF e navigare i collegamenti dalla lista del grafo.
+Se ti manca `latexmk`, puoi installare MacTeX con `brew install --cask mactex-no-gui` e riaprire il terminale. Premi **Shift+Tab**, poi **b**, per compilare l’esempio e popolare l’anteprima. Ghostty e Kitty mostrano il grafo e le pagine PDF a risoluzione grafica. Negli altri terminali puoi leggere il testo del PDF e navigare i collegamenti dalla lista del grafo.
 
 ## Il primo giro
 
 1. Avvia `./notesflow` e scrivi il nome di una **Note Network**. La ricerca include i recenti e i progetti LaTeX in Scrivania, Documenti e nella cartella corrente. Premi **Ctrl+O** per aggiungere una cartella esistente, oppure incolla il percorso nella ricerca. Se hai già un progetto in mente, usa `./notesflow --workspace /percorso/del/corso`.
 2. In Home, **Riprendi** riapre file e cursore dell’ultima sessione. **Nuovo capitolo** propone il file e il punto in cui includerlo nel documento principale. TODO, PDF e roadmap sono visibili dalla Home.
-3. Premi **2** per scrivere. Il PDF occupa la colonna destra. Salva con **:w** e compila con **Shift+Tab**, poi **b**.
+3. Premi **Shift+Tab**, poi **2**, per scrivere. Il PDF occupa la colonna destra. Salva con **:w** e compila con **Shift+Tab**, poi **b**.
 4. Premi **Shift+Tab**, poi **3**, per esplorare il grafo con il buffer aperto. Usa **↑/↓** e **Invio** per aprire un nodo, **Esc** per tornare alla panoramica e **/** per cercare una sezione.
 
 ![Scrittura nella TUI con la colonna PDF estesa](docs/screenshots/editor.png)
 
 ![Grafo neon con nodi etichettati, gerarchia e connessioni semantiche](docs/screenshots/graph.png)
 
-### Comandi
+## Navigare e uscire
+
+Premi **Shift+Tab** per raggiungere la barra di navigazione da qualunque vista, anche mentre scrivi in Neovim, cerchi nel grafo o compili un modulo. I tasti qui sotto si premono dopo aver attivato la barra.
 
 | Tasto | Azione |
 | --- | --- |
-| **1–5** | Home, scrittura, grafo, TODO, attività. Le schede si possono anche cliccare. |
-| **Shift+Tab** | Porta il focus alle schede dall’editor o da un pannello. Usa **1–5** o **←/→** e **Invio**. **Tab** torna al pannello. |
-| **r** / **R** | Seleziona le tappe / espande la roadmap o la riunisce con scorciatoie e stato nella barra in basso. |
-| **t** | Seleziona il riquadro TODO. **←/→** passa fra Tutti, Classici, Visual e Manutenzione. |
+| **1–5** | Apri Home, Scrittura, Grafo, TODO o Attività. Puoi anche scegliere con **←/→** e confermare con **Invio**. |
+| **Tab** o **Esc** | Torna al pannello o al campo da cui sei partito. |
+| **q** | Esci da Notesflow. |
+| **r** / **R** | Seleziona una tappa o espandi e comprimi la roadmap. Quando è compressa, condivide la barra in basso con scorciatoie, messaggi e stato. |
+| **t** | Seleziona i TODO. **←/→** passa fra Tutti, Classici, Visual e Manutenzione. |
 | **p** | Seleziona il PDF. **←/→** cambia pagina e **t** alterna pagina e testo. |
-| **b** / **c** / **q** | Compila / cambia corso / esci. |
+| **b** / **c** / **?** | Compila il PDF, cambia corso o chiedi all’agente. |
+
+Per chiudere una sessione, usa **Shift+Tab**, poi **q**. Puoi anche cliccare **q Esci**. Se Neovim ha modifiche non salvate, Notesflow lascia aperta la sessione e ti riporta alla barra. Premi **2** per tornare in Scrittura. Chiudi un eventuale modulo con **Esc** e premi **Esc** in Neovim per tornare alla modalità normale. Salva tutti i buffer con **:wall**, poi ripeti **Shift+Tab → q**.
 
 ## Roadmap e verifiche
 
@@ -49,7 +56,7 @@ Crea `roadmap.md` nella cartella del corso. Notesflow usa le checkbox oppure, in
 
 Una casella `[x]` negli appunti Markdown o un commento LaTeX `% DONE:` con la stessa descrizione conferma la tappa. Le corrispondenze dubbie vengono completate nella barra con un **!** e aggiungono un **TODO Manutenzione** con il motivo, il file e la riga degli appunti.
 
-Premi **r** per selezionare la tappa, **e** per aprire l’evidenza negli appunti o **Invio** per aprire la roadmap. Conferma con `[x]` oppure aggiungi `<!-- notesflow: pending -->` in coda alla tappa per tenerla aperta. Notesflow aggiorna lo stato nella TUI al salvataggio.
+Premi **Shift+Tab**, poi **r**, per selezionare la tappa, **e** per aprire l’evidenza negli appunti o **Invio** per aprire la roadmap. Conferma con `[x]` oppure aggiungi `<!-- notesflow: pending -->` in coda alla tappa per tenerla aperta. Notesflow aggiorna lo stato nella TUI al salvataggio.
 
 ## Esplora il grafo
 
@@ -64,7 +71,7 @@ Configura un profilo LLM in [notesflow.example.json](notesflow.example.json), op
 - Da **Scrittura**, premi **Shift+Tab**, poi **?**. Chiedi un aiuto sulla sezione corrente, su una formula o sull’ultima compilazione. La risposta è in **Attività**. Usa **f** per continuare o **w** per chiedere di applicare la proposta.
 - Da **Home**, seleziona **Delega**. Scegli un file o una sezione con **←/→**, inserisci la richiesta e premi **Tab** per scegliere le fonti. Usa **Invio** per aggiungere il risultato evidenziato o digita un intervallo come `slide.pdf:12-14`. **Ctrl+S** invia.
 - L’agente riceve il testo della destinazione e le fonti selezionate. Il risultato si applica quando il blocco assegnato è ancora quello di partenza. Se stai scrivendo altrove nello stesso buffer, salvi tutto insieme con **:w**. In caso di conflitto apri **Attività** per confrontare proposta e appunti.
-- Quando l’agente ha una domanda appare una notifica in alto a destra. Cliccala o usa **5 Attività** per scegliere. Dopo 90 secondi si applica la scelta consigliata e compare un **TODO Manutenzione**. Puoi cambiare il tempo con `agent.question_seconds`. **Spazio** mette in pausa o riprende una delega, **s** aggiunge una fonte e **f** invia un messaggio.
+- Quando l’agente ha una domanda appare una notifica in alto a destra. Cliccala o premi **Shift+Tab**, poi **5**, per scegliere. Dopo 90 secondi si applica la scelta consigliata e compare un **TODO Manutenzione**. Puoi cambiare il tempo con `agent.question_seconds`. **Spazio** mette in pausa o riprende una delega, **s** aggiunge una fonte e **f** invia un messaggio.
 - Le figure suggerite compaiono come **TODO Visual** con il riferimento alla slide o la descrizione del diagramma. A delega completata, la notifica apre il riepilogo con fonti e modifiche.
 
 Per aprire direttamente OpenCode, usa `notesflow agent --workspace /percorso/del/corso`.

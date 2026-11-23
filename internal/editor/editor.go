@@ -115,17 +115,6 @@ vim.api.nvim_win_set_cursor(0, {math.min(line, vim.api.nvim_buf_line_count(0)), 
 	})
 }
 
-func (e *Editor) Unsaved(ctx context.Context) (bool, error) {
-	var modified bool
-	err := e.request(ctx, func(v *nvim.Nvim) error {
-		return v.ExecLua(`return #vim.fn.getbufinfo({bufmodified = 1}) > 0`, &modified)
-	})
-	if err != nil {
-		return false, err
-	}
-	return modified, nil
-}
-
 func (e *Editor) request(ctx context.Context, call func(*nvim.Nvim) error) error {
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc

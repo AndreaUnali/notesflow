@@ -88,6 +88,10 @@ func (m *Model) saveSession() {
 	}
 }
 
+func (m Model) workspacePickerOpen() bool {
+	return m.tab == homeTab && len(m.choice.options) > 0
+}
+
 func (m *Model) workspaceKey(key string) tea.Cmd {
 	choice := &m.choice
 	switch key {

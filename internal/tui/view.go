@@ -97,10 +97,10 @@ func (m Model) View() string {
 		width, height := l.left-2, l.body-2
 		var main []string
 		switch {
-		case len(m.choice.options) > 0:
+		case m.workspacePickerOpen():
 			title = m.choice.kind
 			main = m.workspaceRows(height)
-		case m.form.mode != "":
+		case m.formOpen():
 			title = m.formTitle()
 			main = m.formRows(width)
 		case m.tab == editorTab:
@@ -228,18 +228,30 @@ func (m Model) header(l layout) []string {
 		}
 		lines[tab.hit.y] += style.Render("  "+tab.label+"  ") + " "
 	}
-	first, second := " r Roadmap   R Mostra/nascondi   p PDF   t TODO", " b Compila   c Corso   q Esci"
-	if m.commandMode {
-		first = " 1–5 Schede · ? Agente · Tab torna"
-		second = " r/R Roadmap · p PDF · t TODO · b Compila · c Corso · q Esci"
-	} else if m.tab == editorTab || m.focus != mainFocus {
-		first = " Shift+Tab per navigare · Shift+Tab poi ? per chiedere all’agente"
-		second = ""
-	}
+	first := m.navigationHint()
+	second := " ? Agente · r/R Roadmap · p PDF · t TODO · b Compila · c Corso · a API"
 	if l.header == 3 {
 		return append(lines, muted.Render(fit(strings.TrimRight(first+"  "+strings.TrimSpace(second), " "), m.width)))
 	}
 	return append(lines, muted.Render(fit(first, m.width)), muted.Render(fit(second, m.width)))
+}
+
+func (m Model) navigationHint() string {
+	if m.commandMode {
+		return " q Esci · 1–5 Schede · ←/→ · Invio · Tab Torna"
+	}
+	return " Shift+Tab → q Esci · 1–5 Schede"
+}
+
+func (m Model) quitButton(l layout) cellRect {
+	hint := m.navigationHint()
+	before, _, _ := strings.Cut(hint, "q Esci")
+	x := lipgloss.Width(before)
+	row := l.header - 1
+	if m.width < 75 {
+		row--
+	}
+	return cellRect{x, row, min(6, max(0, m.width-x)), 1}
 }
 
 func background(text string) string {
@@ -307,9 +319,9 @@ func (m Model) summaryRows() []string {
 
 func (m Model) help() string {
 	switch {
-	case len(m.choice.options) > 0:
+	case m.workspacePickerOpen():
 		return " ↑↓ Seleziona · Invio Conferma · Esc Salta"
-	case m.form.mode != "":
+	case m.formOpen():
 		return " Esc Torna"
 	case m.focus == roadFocus:
 		items := m.milestones()
@@ -333,7 +345,7 @@ func (m Model) help() string {
 	case m.tab == activityTab && m.agents.detail != 0 && m.agents.book != nil:
 		return m.foldAgentHelp()
 	default:
-		return " ↑↓ Scorri · Invio Seleziona · Tab Cambia vista · a API"
+		return " ↑↓ Scorri · Invio Seleziona · Shift+Tab Naviga"
 	}
 }
 

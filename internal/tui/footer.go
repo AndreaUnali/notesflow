@@ -152,9 +152,9 @@ func milestoneProgress(items []milestone) (full, short string) {
 
 func (m Model) briefHelp() string {
 	switch {
-	case len(m.choice.options) > 0:
+	case m.workspacePickerOpen():
 		return "↑↓ · Invio · Esc"
-	case m.form.mode != "":
+	case m.formOpen():
 		return "Esc Torna"
 	case m.focus == roadFocus, m.focus == sidebarFocus:
 		return "←/→ · Invio · Esc"

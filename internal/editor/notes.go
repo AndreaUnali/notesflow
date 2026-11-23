@@ -27,6 +27,23 @@ return {File = vim.api.nvim_buf_get_name(0), Line = view.lnum, Column = view.col
 	return pos, err
 }
 
+type ExitState struct {
+	Unsaved  bool
+	Position network.Position
+}
+
+func (e *Editor) ExitState(ctx context.Context) (ExitState, error) {
+	var state ExitState
+	err := e.request(ctx, func(v *nvim.Nvim) error {
+		return v.ExecLua(`local view = vim.fn.winsaveview()
+return {
+  Unsaved = #vim.fn.getbufinfo({bufmodified = 1}) > 0,
+  Position = {File = vim.api.nvim_buf_get_name(0), Line = view.lnum, Column = view.col, Top = view.topline}
+}`, &state)
+	})
+	return state, err
+}
+
 func (e *Editor) OpenAt(ctx context.Context, file string, pos network.Position) error {
 	return e.request(ctx, func(v *nvim.Nvim) error {
 		return v.ExecLua(`local path, line, column, top = ...
