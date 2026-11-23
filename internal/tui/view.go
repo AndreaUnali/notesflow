@@ -2,12 +2,16 @@ package tui
 
 import (
 	"fmt"
+	"math"
+	"os"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/AndreaUnali/notesflow/internal/palette"
 	"github.com/AndreaUnali/notesflow/internal/parser"
+	"github.com/AndreaUnali/notesflow/internal/terminal"
 )
 
 type layout struct {
@@ -31,11 +35,12 @@ func (m Model) layout() layout {
 	if l.split {
 		l.left = m.width * 2 / 3
 		l.right = max(0, m.width-l.left)
-		l.todo = min(9, max(3, l.body/3))
+		l.todo = int(math.Ceil(float64(min(9, max(3, l.body/3))) * m.todoFraction))
 		l.pdf = max(0, l.body-l.todo)
 	} else {
-		l.todo = max(3, l.body/5)
-		l.pdf = max(4, l.body/3)
+		baseTODO := max(3, l.body/5)
+		l.todo = int(math.Ceil(float64(baseTODO) * m.todoFraction))
+		l.pdf = max(4, l.body/3) + baseTODO - l.todo
 		l.body = max(0, l.body-l.todo-l.pdf)
 	}
 	return l
@@ -60,7 +65,7 @@ func panel(title string, rows []string, width, height int, active bool) []string
 	}
 	style := dim
 	if active {
-		style = accent
+		style = accent.Bold(false)
 	}
 	count := max(0, width-2)
 	title = " " + clean(title) + " "
@@ -81,7 +86,7 @@ func panel(title string, rows []string, width, height int, active bool) []string
 
 func (m Model) View() string {
 	if m.width < 24 || m.height < 9 {
-		return fit("Notesflow · F12 esci", m.width)
+		return m.surface.Marker(nil) + fit("Notesflow · Ctrl+G q", m.width)
 	}
 	l := m.layout()
 	lines := m.header(l)
@@ -91,9 +96,12 @@ func (m Model) View() string {
 		var main []string
 		switch m.tab {
 		case editorTab:
-			title = "Neovim"
+			title = "Scrittura"
 			if mode := m.editorFrame.Mode(); mode != "" {
-				title += " · " + strings.ToUpper(mode)
+				title += " · " + editorMode(mode)
+				if m.lastFile != "" {
+					title += "  /  " + m.lastFile
+				}
 			}
 			switch {
 			case m.editorBusy && m.editor == nil:
@@ -128,7 +136,7 @@ func (m Model) View() string {
 		if !l.split {
 			rightWidth = l.left
 		}
-		top := panel(fmt.Sprintf("TODO · %d", len(m.tasks(false))), m.sidebarTasks(l.todo-2), rightWidth, l.todo, false)
+		top := panel(fmt.Sprintf("TODO · %d", len(m.tasks(false))), m.sidebarRows(rightWidth-2, l.todo-2), rightWidth, l.todo, false)
 		preview := panel("Anteprima PDF", m.pdfRows(), rightWidth, l.pdf, m.focus == pdfFocus)
 		aside := append(top, preview...)
 		if l.split {
@@ -148,53 +156,144 @@ func (m Model) View() string {
 	}
 	lines = append(lines, m.roadRows(l.road)...)
 	lines = append(lines, muted.Render(fit(m.help(), m.width)), fit(clean(m.message), m.width), accent.Render(fit(m.status(), m.width)))
+	for i, line := range lines {
+		lines[i] = background(fit(line, m.width))
+	}
+	var images []terminal.Placement
+	if p := m.pdfPlacement(); p.Graphic != nil {
+		images = append(images, p)
+	}
+	if m.tab == graphTab && m.graphSurface.graphic != nil {
+		r := m.graphRect()
+		images = append(images, terminal.Placement{Graphic: m.graphSurface.graphic, X: r.x, Y: r.y, Cols: r.cols, Rows: r.rows})
+	}
+	lines[0] = m.surface.Marker(images) + lines[0]
 	return strings.Join(lines[:min(m.height, len(lines))], "\n")
 }
 
-func (m Model) header(l layout) []string {
-	lines := []string{fit(accent.Render(" NOTESFLOW")+"  /  "+clean(m.scopeName()), m.width)}
-	names := []string{"F1 Home", "F2 Editor", "F3 Grafo", "F4 TODO", "F5 Attività"}
-	var tabs []string
-	for i, label := range names {
-		style := muted
-		if i == m.tab && m.focus == mainFocus {
-			style = selectedStyle
-		}
-		tabs = append(tabs, style.Render(" "+label+" "))
-	}
-	if m.width < 57 {
-		lines = append(lines, fit(strings.Join(tabs[:3], " "), m.width), fit(strings.Join(tabs[3:], " "), m.width))
-	} else {
-		lines = append(lines, fit(strings.Join(tabs, " "), m.width))
-	}
-	if l.header == 3 {
-		return append(lines, muted.Render(fit(" F6 Roadmap   F7 Collassa   F8 PDF   F9 Compila   F10 Corso   F12 Esci", m.width)))
-	}
-	return append(lines, muted.Render(fit(" F6 Roadmap   F7 Collassa   F8 PDF", m.width)), muted.Render(fit(" F9 Compila   F10 Corso   F12 Esci", m.width)))
+type tabControl struct {
+	label string
+	tab   int
+	hit   cellRect
 }
 
-func (m Model) sidebarTasks(height int) []string {
-	if height <= 0 {
+func (m Model) tabs() []tabControl {
+	names := []string{"1 Home", "2 Scrittura", "3 Grafo", "4 TODO", "5 Attività"}
+	x, y := 0, 1
+	tabs := make([]tabControl, 0, len(names))
+	for i, label := range names {
+		if m.width < 57 && i == 3 {
+			x, y = 0, 2
+		}
+		w := lipgloss.Width(label) + 4
+		tabs = append(tabs, tabControl{label, i, cellRect{x, y, w, 1}})
+		x += w + 1
+	}
+	return tabs
+}
+
+func (m Model) header(l layout) []string {
+	lines := []string{fit(accent.Render(" ◉  NOTESFLOW")+"  /  "+clean(m.scopeName()), m.width)}
+	tabRows := 1
+	if m.width < 57 {
+		tabRows = 2
+	}
+	for range tabRows {
+		lines = append(lines, "")
+	}
+	for _, tab := range m.tabs() {
+		style := muted.Background(lipgloss.Color(palette.Surface))
+		if tab.tab == m.tab && m.focus == mainFocus {
+			style = selectedStyle
+		}
+		lines[tab.hit.y] += style.Render("  "+tab.label+"  ") + " "
+	}
+	first, second := " r Roadmap   R Mostra/nascondi   p PDF", " b Compila   c Corso   q Esci"
+	if m.commandMode {
+		first = " CTRL+G › 1–5 viste · r/R Roadmap · p PDF"
+		second = " b Compila · c Corso · q Esci · Esc annulla"
+	} else if m.tab == editorTab || m.focus != mainFocus {
+		first = " ^G + r/R Roadmap · p PDF"
+		second = " ^G + b Compila · c Corso · q Esci"
+	}
+	if l.header == 3 {
+		return append(lines, muted.Render(fit(first+"  "+strings.TrimSpace(second), m.width)))
+	}
+	return append(lines, muted.Render(fit(first, m.width)), muted.Render(fit(second, m.width)))
+}
+
+func background(text string) string {
+	if os.Getenv("NO_COLOR") != "" {
+		return text
+	}
+	const dark = "\x1b[48;2;9;11;16m"
+	return dark + strings.ReplaceAll(text, "\x1b[0m", "\x1b[0m"+dark) + "\x1b[0m"
+}
+
+func editorMode(mode string) string {
+	switch mode {
+	case "normal":
+		return "NORMALE"
+	case "insert":
+		return "INSERIMENTO"
+	case "visual", "visual_line", "visual_block":
+		return "SELEZIONE"
+	case "cmdline_normal", "cmdline_insert":
+		return "COMANDO"
+	case "terminal":
+		return "TERMINALE"
+	default:
+		return strings.ToUpper(mode)
+	}
+}
+
+type sidebarEntry struct {
+	label string
+	task  int
+}
+
+func (m Model) sidebarTasks(width, height int) []sidebarEntry {
+	if width < 5 || height <= 0 {
 		return nil
 	}
 	tasks := m.tasks(false)
 	if len(tasks) == 0 {
-		return []string{muted.Render(" Nessun TODO nel corso")}
+		return []sidebarEntry{{muted.Render(" Nessun TODO nel corso"), -1}}
 	}
-	limit := height
-	if len(tasks) > height && height > 1 {
-		limit--
-	}
-	var rows []string
-	for _, task := range tasks[:min(len(tasks), limit)] {
-		mark := accent.Render(" ◇ ")
+	var rows []sidebarEntry
+	for i, task := range tasks {
+		first := accent.Render(" ◇ ")
 		if task.Kind == "VISUAL" {
-			mark = pink.Render(" ◆ ")
+			first = pink.Render(" ◆ ")
 		}
-		rows = append(rows, mark+clean(task.Text))
+		lines := strings.Split(ansi.Wrap(clean(task.Text), width-3, " "), "\n")
+		if len(lines) > 2 {
+			lines = lines[:2]
+			lines[1] = ansi.Truncate(lines[1]+"…", width-3, "…")
+		}
+		if len(rows)+len(lines) > height {
+			if len(rows) == height {
+				rows = rows[:height-1]
+			}
+			rows = append(rows, sidebarEntry{muted.Render(" 4 · Vedi tutti i TODO"), -1})
+			break
+		}
+		for j, text := range lines {
+			prefix := "   "
+			if j == 0 {
+				prefix = first
+			}
+			rows = append(rows, sidebarEntry{prefix + strings.TrimSpace(text), i})
+		}
 	}
-	if len(tasks) > limit && height > 1 {
-		rows = append(rows, muted.Render(fmt.Sprintf(" F4 · altri %d", len(tasks)-limit)))
+	return rows
+}
+
+func (m Model) sidebarRows(width, height int) []string {
+	entries := m.sidebarTasks(width, height)
+	rows := make([]string, len(entries))
+	for i, e := range entries {
+		rows[i] = e.label
 	}
 	return rows
 }
@@ -205,10 +304,13 @@ func (m Model) listRows(height int) []string {
 		return []string{muted.Render(" Nessun elemento")}
 	}
 	cursor := min(m.cursor, len(items)-1)
-	start := max(0, min(cursor-height/2, len(items)-height))
+	start := listStart(cursor, len(items), height)
 	rows := []string{}
 	for i := start; i < min(len(items), start+height); i++ {
 		label := clean(items[i].text)
+		if m.tab == homeTab && i < len(homeActions) && m.layout().left >= 70 {
+			label = fit(label, 32) + muted.Render(homeDetails[i])
+		}
 		if i == cursor && m.tab != activityTab && m.tab != apiTab {
 			rows = append(rows, accent.Render(" › "+label))
 		} else {
@@ -216,6 +318,15 @@ func (m Model) listRows(height int) []string {
 		}
 	}
 	return rows
+}
+
+func listStart(cursor, length, height int) int {
+	return max(0, min(min(cursor, length-1)-height/2, length-height))
+}
+
+var homeDetails = []string{
+	"Riprendi la sessione di scrittura", "Aggiorna l’anteprima", "Segui i collegamenti tra gli appunti",
+	"Apri le note da completare", "Lavora con un agente nel corso", "Controlla modello e disponibilità", "Leggi gli aggiornamenti del corso",
 }
 
 func (m Model) summaryRows() []string {
@@ -238,11 +349,11 @@ func (m Model) help() string {
 	case m.focus == roadFocus:
 		return " ←/→ Tappe · Invio Apri la fonte · Esc Torna"
 	case m.focus == pdfFocus:
-		return " ←/→ Pagina PDF · Esc Torna"
+		return " ←/→ pagina · ↑/↓ scorri testo · t testo/pagina · Esc torna"
 	case m.tab == editorTab:
-		return " Tasti Neovim · :w Salva · F1 Home · F9 Compila dal disco"
+		return " :w Salva   Ctrl+G poi 1–5 cambia vista   Ctrl+G poi b compila"
 	case m.tab == graphTab:
-		return " ↑↓ Nodi · ←→ Pan · +/− Zoom · 0 Inquadra · / Cerca · f Filtra · Invio Apri"
+		return " / Cerca · +/− Zoom · f Filtra · ↑↓ Nodi · Invio apri · doppio clic apri"
 	case m.tab == todoTab:
 		return " ↑↓ Scorri · f Tipo · s Riepilogo · v Lista · Invio Apri"
 	default:
@@ -299,15 +410,21 @@ func (m Model) roadRows(height int) []string {
 	if total > 0 {
 		progress = fmt.Sprintf("%d/%d completate", done, total)
 	}
-	title := " Roadmap · " + progress + "  [F6 seleziona · F7 collassa]"
+	keys := "r seleziona · R comprimi"
+	prefix := ""
+	if m.tab == editorTab || m.focus != mainFocus {
+		prefix = "^G "
+		keys = "^G r seleziona · ^G R comprimi"
+	}
+	title := " Roadmap · " + progress + "  [" + keys + "]"
 	if height == 1 {
 		if m.focus == roadFocus && len(items) > 0 {
 			selected := min(m.roadCursor, len(items)-1)
 			return []string{accent.Render(fit(fmt.Sprintf("← %d/%d  %s →", selected+1, len(items), clean(items[selected].Title)), m.width))}
 		}
-		shortcut := "  [F7 espandi]"
+		shortcut := "  [" + prefix + "R espandi]"
 		if !m.roadCollapsed {
-			shortcut = "  [F6 seleziona]"
+			shortcut = "  [" + prefix + "r seleziona]"
 		}
 		return []string{accent.Render(fit("▸ Roadmap · "+progress+shortcut, m.width))}
 	}
@@ -329,14 +446,14 @@ func (m Model) roadRows(height int) []string {
 		item := items[i]
 		style, mark := graphColors[2], "○ "
 		if item.Done != nil && *item.Done {
-			style, mark = accent, "✓ "
+			style, mark = accent.Bold(false), "✓ "
 		}
 		if i == cursor && m.focus == roadFocus {
 			style, mark = pink, "› "
 		}
 		dashes := strings.Repeat("─", boxWidth-2)
 		blocks[0].WriteString(style.Render("╭" + dashes + "╮"))
-		blocks[1].WriteString(style.Render("│" + fit(mark+clean(item.Title), boxWidth-2) + "│"))
+		blocks[1].WriteString(style.Render("│" + fit(ansi.Truncate(mark+clean(item.Title), boxWidth-2, "…"), boxWidth-2) + "│"))
 		blocks[2].WriteString(style.Render("╰" + dashes + "╯"))
 	}
 	for i := range blocks {

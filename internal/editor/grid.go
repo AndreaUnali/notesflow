@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/AndreaUnali/notesflow/internal/palette"
 )
 
 type cell struct {
@@ -181,7 +183,7 @@ func (f Frame) Rows() []string {
 				return
 			}
 			if priorCursor {
-				line.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#090B10")).Background(lipgloss.Color("#00F5D4")).Render(run.String()))
+				line.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(palette.Background)).Background(lipgloss.Color(palette.Cyan)).Render(run.String()))
 			} else {
 				style, ok := cache[last]
 				if !ok {

@@ -3,6 +3,7 @@ package editor
 
 import (
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
 	"os"
@@ -14,7 +15,12 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/neovim/go-client/nvim"
+
+	"github.com/AndreaUnali/notesflow/internal/palette"
 )
+
+//go:embed theme.lua
+var theme string
 
 type Editor struct {
 	client  *nvim.Nvim
@@ -27,7 +33,7 @@ type Editor struct {
 func Start(ctx context.Context, dir string, width, height int) (*Editor, error) {
 	v, err := nvim.NewChildProcess(
 		nvim.ChildProcessContext(ctx), nvim.ChildProcessDir(dir),
-		nvim.ChildProcessArgs("--embed"), nvim.ChildProcessServe(false),
+		nvim.ChildProcessArgs("--embed", "--cmd", "let g:notesflow = v:true"), nvim.ChildProcessServe(false),
 		nvim.ChildProcessLogf(func(string, ...any) {}),
 	)
 	if err != nil {
@@ -56,6 +62,13 @@ func Start(ctx context.Context, dir string, width, height int) (*Editor, error) 
 	if err := v.AttachUI(width, height, map[string]any{"ext_linegrid": true, "rgb": true}); err != nil {
 		e.close()
 		return nil, err
+	}
+	if os.Getenv("NOTESFLOW_NVIM_THEME") != "native" {
+		_ = v.ExecLua(theme, nil, map[string]string{
+			"background": palette.Background, "surface": palette.Surface, "line": palette.Line,
+			"text": palette.Text, "muted": palette.Muted, "cyan": palette.Cyan, "pink": palette.Pink,
+			"purple": palette.Purple, "yellow": palette.Yellow,
+		})
 	}
 	go e.dispatch()
 	return e, nil
@@ -163,6 +176,10 @@ func (e *Editor) Key(key tea.KeyMsg) bool {
 	return e.queue(func(v *nvim.Nvim) {
 		_, _ = v.Input(input)
 	})
+}
+
+func (e *Editor) Mouse(button, action, modifiers string, row, col int) {
+	e.queue(func(v *nvim.Nvim) { _ = v.InputMouse(button, action, modifiers, 1, row, col) })
 }
 
 func keyNotation(key tea.KeyMsg) string {

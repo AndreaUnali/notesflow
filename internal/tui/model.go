@@ -16,8 +16,10 @@ import (
 	"github.com/AndreaUnali/notesflow/internal/config"
 	"github.com/AndreaUnali/notesflow/internal/editor"
 	"github.com/AndreaUnali/notesflow/internal/graph"
+	"github.com/AndreaUnali/notesflow/internal/palette"
 	"github.com/AndreaUnali/notesflow/internal/parser"
 	"github.com/AndreaUnali/notesflow/internal/providers"
+	"github.com/AndreaUnali/notesflow/internal/terminal"
 	"github.com/AndreaUnali/notesflow/internal/workflow"
 )
 
@@ -39,11 +41,11 @@ const (
 const rootCourse = "."
 
 var (
-	accent        = lipgloss.NewStyle().Foreground(lipgloss.Color("#00F5D4")).Bold(true)
-	selectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#090B10")).Background(lipgloss.Color("#00F5D4")).Bold(true)
-	muted         = lipgloss.NewStyle().Foreground(lipgloss.Color("#A5B2C8"))
-	dim           = lipgloss.NewStyle().Foreground(lipgloss.Color("#4E6281"))
-	pink          = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF79B5"))
+	accent        = lipgloss.NewStyle().Foreground(lipgloss.Color(palette.Cyan)).Bold(true)
+	selectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(palette.Background)).Background(lipgloss.Color(palette.Cyan)).Bold(true)
+	muted         = lipgloss.NewStyle().Foreground(lipgloss.Color(palette.Muted))
+	dim           = lipgloss.NewStyle().Foreground(lipgloss.Color(palette.Line))
+	pink          = lipgloss.NewStyle().Foreground(lipgloss.Color(palette.Pink))
 )
 
 type Model struct {
@@ -53,12 +55,16 @@ type Model struct {
 	store     *graph.Store
 	manager   *providers.Manager
 	snapshot  graph.Snapshot
+	surface   *terminal.Surface
 
 	tab, cursor, focus int
 	width, height      int
 	course, message    string
 	roadCollapsed      bool
 	roadCursor         int
+	commandMode        bool
+	todoFraction       float64
+	transition         transition
 
 	taskKind, summary        string
 	summarizing, showSummary bool
@@ -72,23 +78,33 @@ type Model struct {
 	quitting                  bool
 
 	pdf                pdfState
-	pdfPage            int
+	pdfPage, pdfOffset int
+	pdfText            bool
 	pdfBusy, compiling bool
 
-	canvas      terminalGraph
-	graphSearch bool
-	query       string
-	edgeFilter  int
-	zoom        float64
-	pan         point
+	canvas           terminalGraph
+	graphSearch      bool
+	query            string
+	edgeFilter       int
+	zoom             float64
+	pan              point
+	graphHover       string
+	graphSurface     renderedGraph
+	graphDrag        dragState
+	graphDragVersion uint64
 }
 
 func New(ctx context.Context, root, url string, cfg config.Config, store *graph.Store, manager *providers.Manager) Model {
 	snapshot, _ := store.Snapshot()
-	m := Model{ctx: ctx, root: root, url: url, cfg: cfg, store: store, manager: manager, snapshot: snapshot, width: 100, height: 32, pdfPage: 1, zoom: 1}
+	m := Model{ctx: ctx, root: root, url: url, cfg: cfg, store: store, manager: manager, snapshot: snapshot, width: 100, height: 32, pdfPage: 1, zoom: 1, todoFraction: 1}
 	if m.isCourseRoot() {
 		m.course = rootCourse
 	}
+	return m
+}
+
+func (m Model) WithSurface(surface *terminal.Surface) Model {
+	m.surface = surface
 	return m
 }
 
@@ -143,6 +159,17 @@ func waitEditor(ctx context.Context, e *editor.Editor) tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.update(msg)
+	if (m.tab == editorTab) != (next.tab == editorTab) {
+		cmd = tea.Batch(cmd, next.beginTransition())
+	}
+	if next.tab == graphTab {
+		next.prepareGraphic()
+	}
+	return next, cmd
+}
+
+func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 	switch v := msg.(type) {
 	case tick:
 		m.snapshot, _ = m.store.Snapshot()
@@ -166,7 +193,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.compiling = false
 		m.message = "PDF aggiornato · " + filepath.Base(v.file)
 		if v.err != nil {
-			m.message = "Compilazione fallita · " + strings.SplitN(v.err.Error(), "\n", 2)[0] + " · vedi F5"
+			m.message = "Compilazione fallita · " + strings.SplitN(v.err.Error(), "\n", 2)[0] + " · vedi 5 Attività"
 			m.store.Log(v.err.Error())
 		}
 		cmd := m.probePDF()
@@ -198,7 +225,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.editor, m.editorFrame = nil, editor.Frame{}
 			m.editorWidth, m.editorHeight = 0, 0
 			if m.tab == editorTab && !m.editorBusy {
-				m.message = "Sessione Neovim chiusa · Invio per riaprire"
+				m.message = "Sessione di scrittura chiusa · Invio per riaprire"
 			}
 		} else {
 			m.editorFrame = v.frame
@@ -209,58 +236,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.err != nil {
 			m.message = v.err.Error()
 		} else if v.unsaved {
-			m.message = "Modifiche non salvate · F2 e :wall per salvarle; :qa! per scartarle"
+			m.message = "Modifiche non salvate · 2 torna alla scrittura · :wall salva"
 		} else {
 			return m, tea.Quit
 		}
+	case transitionFrame:
+		cmd := m.animate(v)
+		return m, cmd
+	case tea.MouseMsg:
+		cmd := m.mouse(tea.MouseEvent(v))
+		return m, cmd
 	case tea.KeyMsg:
 		return m.key(v)
 	}
 	return m, nil
 }
 
-func (m Model) key(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) key(key tea.KeyMsg) (Model, tea.Cmd) {
 	s := key.String()
-	if !key.Paste {
-		switch s {
-		case "f1", "f2", "f3", "f4", "f5":
-			tab := int(s[1] - '1')
-			cmd := m.setTab(tab)
-			return m, cmd
-		case "f6":
-			if m.focus == roadFocus {
-				m.focus = mainFocus
-			} else {
-				m.focus, m.roadCollapsed = roadFocus, false
-			}
-			m.resizeEditor()
-			cmd := m.probePDF()
-			return m, cmd
-		case "f7":
-			m.roadCollapsed = !m.roadCollapsed
-			if m.roadCollapsed && m.focus == roadFocus {
-				m.focus = mainFocus
-			}
-			m.resizeEditor()
-			cmd := m.probePDF()
-			return m, cmd
-		case "f8":
-			if m.focus == pdfFocus {
-				m.focus = mainFocus
-			} else {
-				m.focus = pdfFocus
-			}
-			cmd := m.probePDF()
-			return m, cmd
-		case "f9":
-			cmd := m.compile()
-			return m, cmd
-		case "f10":
-			m.nextCourse()
-			cmd := m.probePDF()
-			return m, cmd
-		case "f12":
-			cmd := m.quit()
+	if !key.Paste && s == "ctrl+g" {
+		if m.commandMode && m.tab == editorTab && m.focus == mainFocus && m.editor != nil {
+			m.editor.Key(key)
+			m.commandMode = false
+		} else {
+			m.commandMode = !m.commandMode
+		}
+		return m, nil
+	}
+	if !key.Paste && (m.commandMode || (m.focus == mainFocus && m.tab != editorTab && !m.graphSearch)) {
+		prefixed := m.commandMode
+		m.commandMode = false
+		cmd, ok := m.command(s)
+		if ok || prefixed {
 			return m, cmd
 		}
 	}
@@ -310,11 +317,8 @@ func (m Model) key(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch s {
-	case "q", "ctrl+c":
+	case "ctrl+c":
 		cmd := m.quit()
-		return m, cmd
-	case "1", "2", "3", "4", "5":
-		cmd := m.setTab(int(s[0] - '1'))
 		return m, cmd
 	case "tab", "shift+tab":
 		step := 1
@@ -323,16 +327,6 @@ func (m Model) key(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		tab := (m.tab + step) % 5
 		cmd := m.setTab(tab)
-		return m, cmd
-	case "c":
-		m.nextCourse()
-		cmd := m.probePDF()
-		return m, cmd
-	case "g":
-		cmd := m.setTab(graphTab)
-		return m, cmd
-	case "a":
-		cmd := m.setTab(apiTab)
 		return m, cmd
 	case "down", "j", "up", "k", "pgdown", "pgup":
 		delta := 1
@@ -395,8 +389,48 @@ func (m Model) key(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *Model) command(key string) (tea.Cmd, bool) {
+	switch key {
+	case "1", "2", "3", "4", "5":
+		return m.setTab(int(key[0] - '1')), true
+	case "r":
+		if m.focus == roadFocus {
+			m.focus = mainFocus
+		} else {
+			m.focus, m.roadCollapsed = roadFocus, false
+		}
+		m.resizeEditor()
+		return m.probePDF(), true
+	case "R":
+		m.roadCollapsed = !m.roadCollapsed
+		if m.roadCollapsed && m.focus == roadFocus {
+			m.focus = mainFocus
+		}
+		m.resizeEditor()
+		return m.probePDF(), true
+	case "p":
+		if m.focus == pdfFocus {
+			m.focus = mainFocus
+		} else {
+			m.focus = pdfFocus
+		}
+		return m.probePDF(), true
+	case "b":
+		return m.compile(), true
+	case "c":
+		m.nextCourse()
+		return m.probePDF(), true
+	case "q":
+		return m.quit(), true
+	case "a":
+		return m.setTab(apiTab), true
+	}
+	return nil, false
+}
+
 func (m *Model) setTab(tab int) tea.Cmd {
 	m.tab, m.cursor, m.focus, m.graphSearch = tab, 0, mainFocus, false
+	m.graphDrag, m.graphHover = dragState{}, ""
 	switch tab {
 	case editorTab:
 		if m.editor == nil {
@@ -427,13 +461,27 @@ func (m *Model) sideKey(s string) tea.Cmd {
 	if m.focus == pdfFocus {
 		page := m.pdfPage
 		switch s {
-		case "up", "k", "left", "pgup":
+		case "left", "pgup":
 			page--
-		case "down", "j", "right", "pgdown":
+		case "right", "pgdown":
 			page++
+		}
+		switch s {
+		case "p":
+			m.focus = mainFocus
+		case "t":
+			m.pdfText = !m.pdfText
+			m.pdfOffset = 0
+		case "up", "k":
+			m.pdfOffset = max(0, m.pdfOffset-1)
+		case "down", "j":
+			m.pdfOffset = min(max(0, strings.Count(m.pdf.text, "\n")), m.pdfOffset+1)
 		}
 		if m.pdf.pages > 0 {
 			page = min(m.pdf.pages, page)
+		}
+		if m.pdfPage != max(1, page) {
+			m.pdfOffset = 0
 		}
 		m.pdfPage = max(1, page)
 		return m.probePDF()
@@ -594,7 +642,7 @@ func (m *Model) nextCourse() {
 	slices.Sort(nested)
 	courses = append(courses, nested...)
 	m.course = courses[(slices.Index(courses, m.course)+1)%len(courses)]
-	m.cursor, m.roadCursor, m.pdfPage, m.showSummary = 0, 0, 1, false
+	m.cursor, m.roadCursor, m.pdfPage, m.pdfOffset, m.showSummary = 0, 0, 1, 0, false
 	m.tab, m.focus = homeTab, mainFocus
 }
 
@@ -631,10 +679,10 @@ func (m Model) tasks(filtered bool) []parser.Task {
 }
 
 var homeActions = []string{
-	"F2  Scrivi appunti in Neovim", "F9  Compila il PDF",
-	"F3  Esplora il grafo", "F4  Consulta e riassumi i TODO",
+	"2   Scrivi appunti", "b   Compila il PDF",
+	"3   Esplora il grafo", "4   Consulta e riassumi i TODO",
 	"     Avvia OpenCode nel corso", " a   Dashboard API e quote",
-	"F5  Consulta l’attività",
+	"5   Consulta l’attività",
 }
 
 func (m Model) files() []source {

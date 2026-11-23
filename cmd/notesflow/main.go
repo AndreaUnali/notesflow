@@ -22,6 +22,7 @@ import (
 	"github.com/AndreaUnali/notesflow/internal/graph"
 	"github.com/AndreaUnali/notesflow/internal/parser"
 	"github.com/AndreaUnali/notesflow/internal/providers"
+	"github.com/AndreaUnali/notesflow/internal/terminal"
 	"github.com/AndreaUnali/notesflow/internal/tui"
 	"github.com/AndreaUnali/notesflow/internal/watcher"
 	"github.com/AndreaUnali/notesflow/internal/web"
@@ -267,7 +268,9 @@ func live(parent context.Context, command, root string, port int, browse bool, c
 		fmt.Println(url)
 		<-ctx.Done()
 	} else {
-		_, err = tea.NewProgram(tui.New(ctx, root, url, cfg, store, manager), tea.WithContext(ctx), tea.WithAltScreen()).Run()
+		surface := terminal.New(os.Stdout, terminal.Enabled())
+		model := tui.New(ctx, root, url, cfg, store, manager).WithSurface(surface)
+		_, err = tea.NewProgram(model, tea.WithContext(ctx), tea.WithAltScreen(), tea.WithOutput(surface), tea.WithMouseAllMotion(), tea.WithFPS(60)).Run()
 		if ctx.Err() != nil && errors.Is(err, tea.ErrProgramKilled) {
 			err = nil
 		}

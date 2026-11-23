@@ -9,10 +9,13 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/AndreaUnali/notesflow/internal/graph"
+	"github.com/AndreaUnali/notesflow/internal/palette"
 	"github.com/AndreaUnali/notesflow/internal/parser"
 )
 
 type point struct{ x, y float64 }
+
+type graphBounds struct{ left, right, top, bottom float64 }
 
 type terminalGraph struct {
 	revision  uint64
@@ -21,6 +24,7 @@ type terminalGraph struct {
 	nodes     []parser.Node
 	edges     []graph.Edge
 	positions map[string]point
+	bounds    graphBounds
 }
 
 func (m Model) graphNodes() []parser.Node {
@@ -135,29 +139,33 @@ func layoutGraph(snapshot graph.Snapshot, visible []parser.Node, scope, center, 
 			pos[i] = point{p.x + (forces[i].x-p.x*.032)*cooling, p.y + (forces[i].y-p.y*.032)*cooling}
 		}
 	}
+	if len(pos) > 0 {
+		g.bounds = graphBounds{pos[0].x, pos[0].x, pos[0].y, pos[0].y}
+	}
 	for i, node := range visible {
-		g.positions[node.ID] = pos[i]
+		p := pos[i]
+		g.positions[node.ID] = p
+		g.bounds.left, g.bounds.right = min(g.bounds.left, p.x), max(g.bounds.right, p.x)
+		g.bounds.top, g.bounds.bottom = min(g.bounds.top, p.y), max(g.bounds.bottom, p.y)
 	}
 	return g
 }
 
 var graphColors = []lipgloss.Style{accent, pink,
-	lipgloss.NewStyle().Foreground(lipgloss.Color("#B693FF")),
-	lipgloss.NewStyle().Foreground(lipgloss.Color("#FEE440"))}
+	lipgloss.NewStyle().Foreground(lipgloss.Color(palette.Purple)),
+	lipgloss.NewStyle().Foreground(lipgloss.Color(palette.Yellow))}
 
 func (m Model) graphRows(width, height int) []string {
 	node, ok := m.graphNode()
-	if !ok {
-		return []string{"Nessun nodo corrispondente"}
-	}
-	var heading string
+	heading := " ● LaTeX   ··· Semantico   ─ Gerarchia"
 	if m.graphSearch || m.query != "" {
-		heading = "/ " + m.query
+		heading = " / " + clean(m.query)
 		if m.graphSearch {
 			heading += "▏"
 		}
-	} else {
-		heading = "• LaTeX  · Semantico  ─ Gerarchia"
+	}
+	if !ok {
+		return []string{heading, " Nessun nodo corrispondente"}
 	}
 	var latex, semantic, hierarchy int
 	for _, edge := range m.snapshot.Edges {
@@ -177,111 +185,29 @@ func (m Model) graphRows(width, height int) []string {
 		accent.Render(clean(node.Title)),
 		muted.Render(fmt.Sprintf("%s:%d · %d LaTeX / %d sem. / %d ger.", clean(node.File), node.Line, latex, semantic, hierarchy)),
 	}
-	if node.Summary != "" {
-		details = append(details, clean(node.Summary))
-	}
-	if height < 7 || width < 20 {
-		return append([]string{heading}, details...)
-	}
-	canvasHeight := height - len(details) - 1
-	lines := m.canvas.draw(width, canvasHeight, node.ID, m.edgeFilter, m.zoom, m.pan)
-	result := append([]string{heading}, lines...)
-	return append(result, details...)
-}
 
-func (g terminalGraph) draw(width, height int, selected string, filter int, zoom float64, pan point) []string {
-	if height <= 0 || width <= 0 {
-		return nil
+	details = append(details, muted.Render(clean(node.Summary)))
+	if m.graphSurface.graphic != nil && height >= 6 {
+		rows := make([]string, 1, height)
+		rows[0] = heading
+		rows = append(rows, make([]string, height-4)...)
+		return append(rows, details...)
 	}
-	type pixel struct {
-		glyph rune
-		tone  int
-	}
-	pixels := make([]pixel, width*height)
-	maxX, maxY := .6, .6
-	for _, p := range g.positions {
-		maxX, maxY = max(maxX, math.Abs(p.x)), max(maxY, math.Abs(p.y))
-	}
-	zoom = max(.3, zoom)
-	scale := min(float64(width-5)/(maxX*2), float64(height-1)/maxY) * zoom
-	project := func(p point) (int, int) {
-		return int(math.Round(float64(width-1)/2 + p.x*scale + pan.x)), int(math.Round(float64(height-1)/2 + p.y*scale/2 + pan.y))
-	}
-	put := func(x, y int, glyph rune, tone int) {
-		if x >= 0 && x < width && y >= 0 && y < height {
-			pixels[y*width+x] = pixel{glyph, tone}
-		}
-	}
-	neighbors := map[string]bool{selected: true}
-	for _, edge := range g.edges {
-		kind := 1
-		glyph := '•'
-		switch edge.Kind {
-		case "semantic":
-			kind, glyph = 2, '·'
-		case "hierarchy":
-			kind, glyph = 3, '─'
-		}
-		if filter != 0 && filter != kind {
+	rows := []string{heading, ""}
+	for _, edge := range m.snapshot.Edges {
+		neighbor := edge.Source
+		if neighbor == node.ID {
+			neighbor = edge.Target
+		} else if edge.Target != node.ID {
 			continue
 		}
-		emphasized := edge.Source == selected || edge.Target == selected
-		tone := 4
-		if emphasized {
-			tone = kind - 1
-			neighbors[edge.Source], neighbors[edge.Target] = true, true
+		if m.edgeFilter != 0 && m.edgeFilter != edgeKind(edge.Kind) {
+			continue
 		}
-		ax, ay := project(g.positions[edge.Source])
-		bx, by := project(g.positions[edge.Target])
-		n := max(abs(bx-ax), abs(by-ay))
-		for i := 1; i < n; i++ {
-			if kind != 2 || i%2 == 0 {
-				x := ax + int(math.Round(float64(i*(bx-ax))/float64(n)))
-				y := ay + int(math.Round(float64(i*(by-ay))/float64(n)))
-				if kind == 3 && y != ay {
-					glyph = '┊'
-				}
-				put(x, y, glyph, tone)
-			}
+		i := slices.IndexFunc(m.snapshot.Nodes, func(n parser.Node) bool { return n.ID == neighbor })
+		if i >= 0 && len(rows) < height-3 {
+			rows = append(rows, graphColors[edgeKind(edge.Kind)-1].Render("  ├─ ")+clean(m.snapshot.Nodes[i].Title))
 		}
 	}
-	courses := map[string]int{}
-	for _, node := range g.nodes {
-		if _, ok := courses[node.Course]; !ok {
-			courses[node.Course] = len(courses)
-		}
-		x, y := project(g.positions[node.ID])
-		tone, glyph := 4, '○'
-		if neighbors[node.ID] {
-			tone, glyph = courses[node.Course]%len(graphColors), '●'
-		}
-		put(x, y, glyph, tone)
-	}
-	if p, ok := g.positions[selected]; ok {
-		x, y := project(p)
-		put(x, y, '◆', 3)
-	}
-	rows := make([]string, height)
-	for y := range height {
-		var row strings.Builder
-		for _, p := range pixels[y*width : (y+1)*width] {
-			switch {
-			case p.glyph == 0:
-				row.WriteByte(' ')
-			case p.tone == 4:
-				row.WriteString(dim.Render(string(p.glyph)))
-			default:
-				row.WriteString(graphColors[p.tone].Render(string(p.glyph)))
-			}
-		}
-		rows[y] = row.String()
-	}
-	return rows
-}
-
-func abs(n int) int {
-	if n < 0 {
-		return -n
-	}
-	return n
+	return append(rows, details...)
 }

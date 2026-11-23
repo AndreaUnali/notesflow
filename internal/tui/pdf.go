@@ -4,8 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"image"
-	"image/color"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,14 +12,16 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
+	"github.com/AndreaUnali/notesflow/internal/terminal"
 	"github.com/AndreaUnali/notesflow/internal/workflow"
 )
 
 type pdfRequest struct {
 	scope, primary, explicit string
-	page, width, height      int
+	page                     int
+	graphics                 bool
 }
 
 type pdfStamp struct {
@@ -33,7 +34,8 @@ type pdfState struct {
 	request     pdfRequest
 	stamp       pdfStamp
 	page, pages int
-	rows        []string
+	pageImage   *terminal.Graphic
+	text        string
 	err         error
 }
 
@@ -72,11 +74,6 @@ func (m Model) mainTeX() string {
 }
 
 func (m Model) previewRequest() pdfRequest {
-	areas := m.layout()
-	width, height := areas.right-2, areas.pdf-3
-	if !areas.split {
-		width = areas.left - 2
-	}
 	explicit := m.cfg.Tools.PDF
 	if !m.fileInScope(explicit) {
 		explicit = ""
@@ -86,7 +83,7 @@ func (m Model) previewRequest() pdfRequest {
 		scope = m.course
 	}
 	return pdfRequest{scope: scope, primary: m.mainTeX(), explicit: explicit, page: max(1, m.pdfPage),
-		width: max(1, min(120, width)), height: max(1, min(70, height))}
+		graphics: m.surface.Enabled() && !m.pdfText}
 }
 
 func (m *Model) probePDF() tea.Cmd {
@@ -126,12 +123,20 @@ func loadPDF(ctx context.Context, root string, request pdfRequest, previous pdfS
 	if state.pages > 0 {
 		state.page = min(state.page, state.pages)
 	}
-	picture, err := workflow.PDFPage(ctx, path, state.page, max(request.width, request.height*2)*2)
-	if err != nil {
+	if request.graphics {
+		picture, err := workflow.PDFPage(ctx, path, state.page)
+		if err == nil {
+			state.pageImage, err = terminal.PNG(picture)
+		}
+		if err == nil {
+			return state
+		}
 		state.err = err
-		return state
 	}
-	state.rows = terminalPage(picture, request.width, request.height)
+	state.text, err = workflow.PDFText(ctx, path, state.page)
+	if err != nil && state.err == nil {
+		state.err = err
+	}
 	return state
 }
 
@@ -174,79 +179,79 @@ func findPDF(root string, request pdfRequest) string {
 	return ""
 }
 
-func terminalPage(input image.Image, width, height int) []string {
-	b := input.Bounds()
-	if b.Empty() {
-		return nil
+func (m Model) pdfRect() cellRect {
+	l := m.layout()
+	if l.split {
+		return cellRect{l.left + 1, l.header + l.todo + 2, l.right - 2, l.pdf - 3}
 	}
-	scale := min(float64(width)/float64(b.Dx()), float64(height*2)/float64(b.Dy()))
-	w, h := max(1, int(float64(b.Dx())*scale)), max(1, int(float64(b.Dy())*scale))
-	type pair struct{ top, bottom color.RGBA }
-	cache := make(map[pair]lipgloss.Style)
-	sample := func(x, y int) color.RGBA {
-		if y >= h {
-			return color.RGBA{R: 9, G: 11, B: 16, A: 255}
-		}
-		// Bilinear interpolation retains page content at terminal cell sizes.
-		xf := (float64(x)+.5)*float64(b.Dx())/float64(w) - .5
-		yf := (float64(y)+.5)*float64(b.Dy())/float64(h) - .5
-		x0, y0 := max(0, int(xf)), max(0, int(yf))
-		x1, y1 := min(b.Dx()-1, x0+1), min(b.Dy()-1, y0+1)
-		tx, ty := max(0, xf-float64(x0)), max(0, yf-float64(y0))
-		colors := [4]color.RGBA{
-			color.RGBAModel.Convert(input.At(b.Min.X+x0, b.Min.Y+y0)).(color.RGBA),
-			color.RGBAModel.Convert(input.At(b.Min.X+x1, b.Min.Y+y0)).(color.RGBA),
-			color.RGBAModel.Convert(input.At(b.Min.X+x0, b.Min.Y+y1)).(color.RGBA),
-			color.RGBAModel.Convert(input.At(b.Min.X+x1, b.Min.Y+y1)).(color.RGBA),
-		}
-		mix := func(a, b, c, d uint8) uint8 {
-			return uint8((float64(a)*(1-tx)+float64(b)*tx)*(1-ty) + (float64(c)*(1-tx)+float64(d)*tx)*ty)
-		}
-		return color.RGBA{R: mix(colors[0].R, colors[1].R, colors[2].R, colors[3].R),
-			G: mix(colors[0].G, colors[1].G, colors[2].G, colors[3].G),
-			B: mix(colors[0].B, colors[1].B, colors[2].B, colors[3].B), A: 255}
+	return cellRect{1, l.header + l.body + l.todo + 2, l.left - 2, l.pdf - 3}
+}
+
+func (m Model) pdfCurrent() bool {
+	r := m.previewRequest()
+	return m.pdf.request.scope == r.scope && m.pdf.request.primary == r.primary && m.pdf.request.explicit == r.explicit
+}
+
+func (m Model) pdfPlacement() terminal.Placement {
+	r := m.pdfRect()
+	picture := m.pdf.pageImage
+	if picture == nil || !m.pdfCurrent() || m.pdfText || r.cols < 4 || r.rows < 3 {
+		return terminal.Placement{}
 	}
-	format := func(c color.RGBA) lipgloss.Color {
-		return lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", c.R, c.G, c.B))
-	}
-	var rows []string
-	for y := 0; y < h; y += 2 {
-		var row strings.Builder
-		row.WriteString(strings.Repeat(" ", max(0, (width-w)/2)))
-		for x := 0; x < w; x++ {
-			key := pair{sample(x, y), sample(x, y+1)}
-			style, ok := cache[key]
-			if !ok {
-				style = lipgloss.NewStyle().Foreground(format(key.top)).Background(format(key.bottom))
-				cache[key] = style
-			}
-			row.WriteString(style.Render("▀"))
-		}
-		rows = append(rows, row.String())
-	}
-	return rows
+	ratio := m.surface.CellRatio(m.width, m.height)
+	aspect := float64(picture.Width) / float64(picture.Height)
+	cols := min(r.cols, max(1, int(math.Round(float64(r.rows)*aspect/ratio))))
+	rows := min(r.rows, max(1, int(math.Round(float64(cols)*ratio/aspect))))
+	return terminal.Placement{Graphic: picture, X: r.x + (r.cols-cols)/2, Y: r.y, Cols: cols, Rows: rows}
 }
 
 func (m Model) pdfRows() []string {
-	if m.pdf.request.scope != m.previewRequest().scope || m.pdf.request.primary != m.mainTeX() {
-		return []string{muted.Render("Caricamento…")}
-	}
-	if m.pdf.err != nil {
-		return []string{m.pdf.err.Error()}
+	if !m.pdfCurrent() {
+		return []string{muted.Render(" Caricamento…")}
 	}
 	if m.pdf.stamp.path == "" {
-		hint := "F9 compila il progetto"
+		hint := "b compila il documento"
 		if m.mainTeX() == "" {
-			hint = "Imposta tools.main_tex o tools.pdf"
+			hint = "Scegli un PDF con tools.pdf"
 		}
-		return []string{muted.Render("PDF non disponibile"), muted.Render(hint)}
+		return []string{muted.Render(" PDF da compilare"), muted.Render(" " + hint)}
 	}
-	page := fmt.Sprintf("Pag. %d", m.pdf.page)
+	page := fmt.Sprintf(" Pag. %d", m.pdf.page)
 	if m.pdf.pages > 0 {
 		page += fmt.Sprintf("/%d", m.pdf.pages)
 	}
-	label := page + " · " + filepath.Base(m.pdf.stamp.path)
-	return append([]string{muted.Render(label)}, m.pdf.rows...)
+	label := muted.Render(fit(page+" · "+clean(filepath.Base(m.pdf.stamp.path)), m.pdfRect().cols-5) + " ‹ › ")
+	if m.pdfPlacement().Graphic != nil {
+		return []string{label}
+	}
+	if m.pdf.request.graphics != m.previewRequest().graphics {
+		return []string{label, muted.Render(" Caricamento…")}
+	}
+	if m.pdf.text != "" {
+		text := strings.Split(m.pdf.text, "\n")
+		offset := min(m.pdfOffset, len(text)-1)
+		rows := []string{label}
+		width := m.pdfRect().cols - 2
+		blank := false
+		for _, line := range text[offset:] {
+			line = clean(strings.TrimSpace(line))
+			if line == "" && blank {
+				continue
+			}
+			blank = line == ""
+			for _, wrapped := range strings.Split(ansi.Wrap(line, max(1, width), " "), "\n") {
+				rows = append(rows, " "+wrapped)
+			}
+			if len(rows) > m.pdfRect().rows {
+				break
+			}
+		}
+		return rows
+	}
+	if m.pdf.err != nil {
+		return []string{label, " " + clean(m.pdf.err.Error())}
+	}
+	return []string{label, muted.Render(" Pagina priva di testo estraibile")}
 }
 
 type compiled struct {

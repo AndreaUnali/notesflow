@@ -1,11 +1,8 @@
 package workflow
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"image"
-	"image/png"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -26,17 +23,28 @@ func PDFPages(ctx context.Context, file string) int {
 	return 0
 }
 
-// PDFPage rasterizes one page. The preview is bounded before PNG decoding.
-func PDFPage(ctx context.Context, file string, page, size int) (image.Image, error) {
+func PDFPage(ctx context.Context, file string, page int) ([]byte, error) {
 	renderer, err := exec.LookPath("pdftoppm")
 	if err != nil {
-		return nil, fmt.Errorf("serve pdftoppm (Poppler) per l’anteprima")
+		return nil, fmt.Errorf("installa Poppler per l’anteprima PDF")
 	}
 	p := strconv.Itoa(page)
-	result, err := exec.CommandContext(ctx, renderer, "-f", p, "-l", p, "-scale-to",
-		strconv.Itoa(min(256, max(32, size))), "-singlefile", "-png", file).Output()
+	result, err := exec.CommandContext(ctx, renderer, "-f", p, "-l", p, "-scale-to", "1400", "-singlefile", "-png", file).Output()
 	if err != nil {
 		return nil, fmt.Errorf("impossibile leggere la pagina %d del PDF", page)
 	}
-	return png.Decode(bytes.NewReader(result))
+	return result, nil
+}
+
+func PDFText(ctx context.Context, file string, page int) (string, error) {
+	extractor, err := exec.LookPath("pdftotext")
+	if err != nil {
+		return "", fmt.Errorf("installa Poppler per leggere il PDF")
+	}
+	p := strconv.Itoa(page)
+	result, err := exec.CommandContext(ctx, extractor, "-f", p, "-l", p, "-nopgbrk", file, "-").Output()
+	if err != nil {
+		return "", fmt.Errorf("impossibile estrarre il testo della pagina %d", page)
+	}
+	return strings.TrimSpace(string(result)), nil
 }

@@ -42,7 +42,7 @@ func TestCourseHomeKeepsPreviewRoadmapAndShortcutsInFrame(t *testing.T) {
 	}
 	model.width, model.height = 120, 42
 	view := ansi.Strip(model.View())
-	for _, marker := range []string{"F1 Home", "F2 Editor", "F3 Grafo", "F7 Collassa", "TODO · 2", "Anteprima PDF", "Roadmap · 1/2", "─▶"} {
+	for _, marker := range []string{"1 Home", "2 Scrittura", "3 Grafo", "R Mostra/nascondi", "TODO · 2", "Anteprima PDF", "Roadmap · 1/2", "─▶"} {
 		if !strings.Contains(view, marker) {
 			t.Errorf("view does not contain %q", marker)
 		}
@@ -54,11 +54,11 @@ func TestCourseHomeKeepsPreviewRoadmapAndShortcutsInFrame(t *testing.T) {
 		t.Fatalf("view has %d rows", lines)
 	}
 	model.roadCollapsed = true
-	if view := ansi.Strip(model.View()); !strings.Contains(view, "F7 espandi") || strings.Contains(view, "─▶") {
+	if view := ansi.Strip(model.View()); !strings.Contains(view, "R espandi") || strings.Contains(view, "─▶") {
 		t.Fatal("the roadmap did not collapse")
 	}
 	model.width = 48
-	if view := ansi.Strip(model.View()); !strings.Contains(view, "F5 Attività") || !strings.Contains(view, "Anteprima PDF") {
+	if view := ansi.Strip(model.View()); !strings.Contains(view, "5 Attività") || !strings.Contains(view, "Anteprima PDF") {
 		t.Fatal("shortcuts and preview must be visible in a narrow terminal")
 	}
 }
