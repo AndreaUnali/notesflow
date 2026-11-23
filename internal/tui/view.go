@@ -86,7 +86,7 @@ func panel(title string, rows []string, width, height int, active bool) []string
 
 func (m Model) View() string {
 	if m.width < 24 || m.height < 9 {
-		return m.surface.Marker(nil) + fit("Notesflow · Ctrl+G q", m.width)
+		return m.surface.Marker(nil) + fit("Notesflow · Shift+Tab naviga", m.width)
 	}
 	l := m.layout()
 	lines := m.header(l)
@@ -203,21 +203,21 @@ func (m Model) header(l layout) []string {
 	}
 	for _, tab := range m.tabs() {
 		style := muted.Background(lipgloss.Color(palette.Surface))
-		if tab.tab == m.tab && m.focus == mainFocus {
+		if (m.commandMode && tab.tab == m.navTab) || (!m.commandMode && tab.tab == m.tab && m.focus == mainFocus) {
 			style = selectedStyle
 		}
 		lines[tab.hit.y] += style.Render("  "+tab.label+"  ") + " "
 	}
 	first, second := " r Roadmap   R Mostra/nascondi   p PDF", " b Compila   c Corso   q Esci"
 	if m.commandMode {
-		first = " CTRL+G › 1–5 viste · r/R Roadmap · p PDF"
-		second = " b Compila · c Corso · q Esci · Esc annulla"
+		first = " ←/→ schede · Invio apri · Tab torna"
+		second = " r/R Roadmap · p PDF · b Compila · c Corso · q Esci"
 	} else if m.tab == editorTab || m.focus != mainFocus {
-		first = " ^G + r/R Roadmap · p PDF"
-		second = " ^G + b Compila · c Corso · q Esci"
+		first = " Shift+Tab · Focus sulle schede"
+		second = ""
 	}
 	if l.header == 3 {
-		return append(lines, muted.Render(fit(first+"  "+strings.TrimSpace(second), m.width)))
+		return append(lines, muted.Render(fit(strings.TrimRight(first+"  "+strings.TrimSpace(second), " "), m.width)))
 	}
 	return append(lines, muted.Render(fit(first, m.width)), muted.Render(fit(second, m.width)))
 }
@@ -351,7 +351,7 @@ func (m Model) help() string {
 	case m.focus == pdfFocus:
 		return " ←/→ pagina · ↑/↓ scorri testo · t testo/pagina · Esc torna"
 	case m.tab == editorTab:
-		return " :w Salva   Ctrl+G poi 1–5 cambia vista   Ctrl+G poi b compila"
+		return " :w Salva   Shift+Tab naviga   Shift+Tab poi b compila"
 	case m.tab == graphTab:
 		return " / Cerca · +/− Zoom · f Filtra · ↑↓ Nodi · Invio apri · doppio clic apri"
 	case m.tab == todoTab:
@@ -413,8 +413,10 @@ func (m Model) roadRows(height int) []string {
 	keys := "r seleziona · R comprimi"
 	prefix := ""
 	if m.tab == editorTab || m.focus != mainFocus {
-		prefix = "^G "
-		keys = "^G r seleziona · ^G R comprimi"
+		if !m.commandMode {
+			prefix = "Shift+Tab, poi "
+			keys = "Shift+Tab, poi r/R"
+		}
 	}
 	title := " Roadmap · " + progress + "  [" + keys + "]"
 	if height == 1 {

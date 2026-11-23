@@ -63,6 +63,7 @@ type Model struct {
 	roadCollapsed      bool
 	roadCursor         int
 	commandMode        bool
+	navTab             int
 	todoFraction       float64
 	transition         transition
 
@@ -254,20 +255,19 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 
 func (m Model) key(key tea.KeyMsg) (Model, tea.Cmd) {
 	s := key.String()
-	if !key.Paste && s == "ctrl+g" {
-		if m.commandMode && m.tab == editorTab && m.focus == mainFocus && m.editor != nil {
-			m.editor.Key(key)
-			m.commandMode = false
-		} else {
-			m.commandMode = !m.commandMode
+	if m.commandMode {
+		if !key.Paste {
+			cmd := m.navigate(s)
+			return m, cmd
 		}
+		m.commandMode = false
+	}
+	if !key.Paste && s == "shift+tab" && (m.tab == editorTab || m.focus != mainFocus) {
+		m.commandMode, m.navTab = true, min(m.tab, activityTab)
 		return m, nil
 	}
-	if !key.Paste && (m.commandMode || (m.focus == mainFocus && m.tab != editorTab && !m.graphSearch)) {
-		prefixed := m.commandMode
-		m.commandMode = false
-		cmd, ok := m.command(s)
-		if ok || prefixed {
+	if !key.Paste && m.focus == mainFocus && m.tab != editorTab && !m.graphSearch {
+		if cmd, ok := m.command(s); ok {
 			return m, cmd
 		}
 	}
@@ -389,6 +389,27 @@ func (m Model) key(key tea.KeyMsg) (Model, tea.Cmd) {
 	return m, nil
 }
 
+// navigate moves within the tab bar without sending keys to the active pane.
+func (m *Model) navigate(key string) tea.Cmd {
+	const count = activityTab + 1
+	switch key {
+	case "left", "h":
+		m.navTab = (m.navTab + count - 1) % count
+	case "right", "l":
+		m.navTab = (m.navTab + 1) % count
+	case "enter":
+		return m.setTab(m.navTab)
+	case "tab", "shift+tab", "esc":
+		m.commandMode = false
+	default:
+		if cmd, ok := m.command(key); ok {
+			m.commandMode = false
+			return cmd
+		}
+	}
+	return nil
+}
+
 func (m *Model) command(key string) (tea.Cmd, bool) {
 	switch key {
 	case "1", "2", "3", "4", "5":
@@ -430,6 +451,7 @@ func (m *Model) command(key string) (tea.Cmd, bool) {
 
 func (m *Model) setTab(tab int) tea.Cmd {
 	m.tab, m.cursor, m.focus, m.graphSearch = tab, 0, mainFocus, false
+	m.commandMode = false
 	m.graphDrag, m.graphHover = dragState{}, ""
 	switch tab {
 	case editorTab:

@@ -63,9 +63,9 @@ type dragState struct {
 func (m *Model) mouse(event tea.MouseEvent) tea.Cmd {
 	click := event.Button == tea.MouseButtonLeft && event.Action == tea.MouseActionPress
 	if click {
+		m.commandMode = false
 		for _, tab := range m.tabs() {
 			if tab.hit.contains(event.X, event.Y) {
-				m.commandMode = false
 				return m.setTab(tab.tab)
 			}
 		}

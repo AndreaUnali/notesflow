@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/AndreaUnali/notesflow/internal/config"
@@ -60,5 +61,31 @@ func TestCourseHomeKeepsPreviewRoadmapAndShortcutsInFrame(t *testing.T) {
 	model.width = 48
 	if view := ansi.Strip(model.View()); !strings.Contains(view, "5 Attività") || !strings.Contains(view, "Anteprima PDF") {
 		t.Fatal("shortcuts and preview must be visible in a narrow terminal")
+	}
+}
+
+func TestShiftTabFocusesNavigationWithoutChangingEditorTab(t *testing.T) {
+	model := Model{tab: editorTab}
+	model, _ = model.key(tea.KeyMsg{Type: tea.KeyShiftTab})
+	if !model.commandMode || model.navTab != editorTab || model.tab != editorTab {
+		t.Fatalf("expected focus on the editor tab: %+v", model)
+	}
+	model, _ = model.key(tea.KeyMsg{Type: tea.KeyRight})
+	if model.navTab != graphTab || model.tab != editorTab {
+		t.Fatalf("expected graph highlighted without switching tabs")
+	}
+	model, _ = model.key(tea.KeyMsg{Type: tea.KeyTab})
+	if model.commandMode || model.tab != editorTab {
+		t.Fatal("Tab should return to the editor")
+	}
+	model, _ = model.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("1")})
+	if model.tab != editorTab {
+		t.Fatal("plain digits belong to the editor")
+	}
+	model, _ = model.key(tea.KeyMsg{Type: tea.KeyShiftTab})
+	model, _ = model.key(tea.KeyMsg{Type: tea.KeyLeft})
+	model, _ = model.key(tea.KeyMsg{Type: tea.KeyEnter})
+	if model.commandMode || model.tab != homeTab {
+		t.Fatal("Enter should open the highlighted Home tab")
 	}
 }
