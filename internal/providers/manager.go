@@ -138,6 +138,10 @@ func (m *Manager) status(profile config.Profile, now time.Time) ProfileStatus {
 
 // run reserves quota before I/O, then falls back to each remaining pool profile.
 func (m *Manager) run(ctx context.Context, do func(config.Profile) error) (string, error) {
+	return m.runFor(ctx, nil, do)
+}
+
+func (m *Manager) runFor(ctx context.Context, eligible func(config.Profile) bool, do func(config.Profile) error) (string, error) {
 	m.mu.Lock()
 	start := slices.IndexFunc(m.profiles, func(p config.Profile) bool { return p.ID == m.state.Active })
 	m.mu.Unlock()
@@ -148,6 +152,9 @@ func (m *Manager) run(ctx context.Context, do func(config.Profile) error) (strin
 			return "", err
 		}
 		profile := m.profiles[(start+offset)%len(m.profiles)]
+		if eligible != nil && !eligible(profile) {
+			continue
+		}
 		ok, err := m.reserve(profile)
 		if err != nil {
 			return "", err

@@ -1,0 +1,227 @@
+// Package agent keeps the record of delegated changes and human decisions.
+package agent
+
+import (
+	"cmp"
+	"context"
+	"errors"
+	"fmt"
+	"path/filepath"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/AndreaUnali/notesflow/internal/storage"
+)
+
+const (
+	Working   = "In corso"
+	Waiting   = "Domanda"
+	Paused    = "In pausa"
+	Ready     = "Da applicare"
+	Review    = "Da verificare"
+	Completed = "Completata"
+	Answered  = "Risposta"
+	Failed    = "Errore"
+)
+
+type Target struct {
+	File    string
+	Section string
+	Title   string
+	Line    int
+}
+
+type Ref struct {
+	File  string `json:"file"`
+	First int    `json:"first_page,omitempty"`
+	Last  int    `json:"last_page,omitempty"`
+}
+
+func (r Ref) String() string {
+	switch {
+	case r.First == 0:
+		return r.File
+	case r.First == r.Last:
+		return fmt.Sprintf("%s:%d", r.File, r.First)
+	default:
+		return fmt.Sprintf("%s:%d-%d", r.File, r.First, r.Last)
+	}
+}
+
+type Material struct {
+	Ref
+	Text string `json:"text"`
+}
+
+type Question struct {
+	Text        string   `json:"text"`
+	Choices     []string `json:"choices"`
+	Recommended int      `json:"recommended"`
+	Why         string   `json:"why"`
+}
+
+type Visual struct {
+	Location    string `json:"location"`
+	Description string `json:"description"`
+}
+
+type Draft struct {
+	Summary    string    `json:"summary"`
+	Text       string    `json:"replacement"`
+	Visuals    []Visual  `json:"visuals"`
+	Question   *Question `json:"question"`
+	References []string  `json:"references"`
+}
+
+type Turn struct {
+	Role string `json:"role"`
+	Text string `json:"text"`
+}
+
+type Job struct {
+	ID           int
+	Course       string
+	Target       Target
+	Goal         string
+	Write        bool
+	Sources      []Ref
+	History      []Turn
+	Original     string
+	Result       Draft
+	State        string
+	Error        string
+	Deadline     time.Time
+	Updated      time.Time
+	Decision     string
+	DecisionWhy  string
+	Automatic    bool
+	Applied      int
+	Buffered     bool
+	BufferedHash string
+	Compilation  string
+}
+
+type Request struct {
+	Target      Target     `json:"target"`
+	Goal        string     `json:"goal"`
+	Write       bool       `json:"write"`
+	Original    string     `json:"original"`
+	Sources     []Material `json:"sources"`
+	History     []Turn     `json:"history"`
+	Decision    string     `json:"decision,omitempty"`
+	Compilation string     `json:"compilation,omitempty"`
+	CanAsk      bool       `json:"can_ask"`
+}
+
+type Backend interface {
+	Guide(context.Context, Request) (Draft, error)
+}
+
+type Book struct {
+	path string
+	Jobs []Job
+}
+
+func Open(root string) (*Book, error) {
+	book := &Book{path: filepath.Join(root, ".notesflow", "agent.json")}
+	if err := storage.Load(book.path, &book.Jobs); err != nil {
+		return nil, err
+	}
+	for i := range book.Jobs {
+		if book.Jobs[i].State == Working {
+			book.Jobs[i].State = Paused
+			book.Jobs[i].Error = "Riprendi la richiesta da Attività."
+		}
+	}
+	return book, nil
+}
+
+func (b *Book) Lookup(id int) (Job, bool) {
+	for _, j := range b.Jobs {
+		if j.ID == id {
+			return j, true
+		}
+	}
+	return Job{}, false
+}
+
+func (b *Book) Store(j Job) error {
+	next := slices.Clone(b.Jobs)
+	j.Updated = time.Now()
+	i := slices.IndexFunc(next, func(other Job) bool { return other.ID == j.ID })
+	if i < 0 {
+		j.ID = 1
+		for _, other := range next {
+			j.ID = max(j.ID, other.ID+1)
+		}
+		next = append(next, j)
+	} else {
+		next[i] = j
+	}
+	if err := storage.Save(b.path, next); err != nil {
+		return err
+	}
+	b.Jobs = next
+	return nil
+}
+
+func (b *Book) RecentSources(course string) []Ref {
+	var refs []Ref
+	for _, job := range slices.Backward(b.Jobs) {
+		if job.Course == course {
+			for _, ref := range job.Sources {
+				if !slices.Contains(refs, ref) {
+					refs = append(refs, ref)
+				}
+			}
+		}
+	}
+	return refs
+}
+
+func (b *Book) ForCourse(course string) []Job {
+	var jobs []Job
+	for _, job := range b.Jobs {
+		if course == "" || job.Course == course {
+			jobs = append(jobs, job)
+		}
+	}
+	slices.SortStableFunc(jobs, func(a, b Job) int { return cmp.Compare(b.ID, a.ID) })
+	return jobs
+}
+
+func Run(ctx context.Context, root string, backend Backend, job Job) (Draft, error) {
+	materials, err := readMaterials(ctx, root, job.Sources)
+	if err != nil {
+		return Draft{}, err
+	}
+	request := Request{
+		Target: job.Target, Goal: job.Goal, Write: job.Write, Original: job.Original,
+		Sources: materials, History: job.History[max(0, len(job.History)-12):],
+		Decision: job.Decision, Compilation: job.Compilation, CanAsk: job.Decision == "" && job.Write,
+	}
+	draft, err := backend.Guide(ctx, request)
+	if err != nil {
+		return Draft{}, err
+	}
+	draft.References = slices.DeleteFunc(draft.References, func(ref string) bool {
+		return !slices.ContainsFunc(job.Sources, func(source Ref) bool {
+			return ref == source.String() || ref == source.File
+		})
+	})
+	if strings.TrimSpace(draft.Summary) == "" || len(draft.Summary) > 12000 || len(draft.Text) > 64000 || len(draft.Visuals) > 12 {
+		return Draft{}, errors.New("risposta dell’agente mancante o troppo lunga")
+	}
+	if q := draft.Question; q != nil {
+		if !request.CanAsk || len(q.Choices) < 2 || len(q.Choices) > 3 || q.Recommended < 0 || q.Recommended >= len(q.Choices) ||
+			strings.TrimSpace(q.Text) == "" || strings.TrimSpace(q.Why) == "" ||
+			slices.ContainsFunc(q.Choices, func(choice string) bool { return strings.TrimSpace(choice) == "" }) {
+			return Draft{}, errors.New("domanda dell’agente incompleta")
+		}
+	}
+	if job.Write && strings.TrimSpace(draft.Text) == "" && draft.Question == nil && len(draft.Visuals) == 0 {
+		return Draft{}, errors.New("l’agente non ha restituito modifiche")
+	}
+	return draft, nil
+}

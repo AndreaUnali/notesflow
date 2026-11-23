@@ -20,6 +20,7 @@ import (
 
 	"github.com/AndreaUnali/notesflow/internal/config"
 	"github.com/AndreaUnali/notesflow/internal/graph"
+	"github.com/AndreaUnali/notesflow/internal/network"
 	"github.com/AndreaUnali/notesflow/internal/parser"
 	"github.com/AndreaUnali/notesflow/internal/providers"
 	"github.com/AndreaUnali/notesflow/internal/terminal"
@@ -109,6 +110,15 @@ func run(ctx context.Context, args []string) error {
 	}
 	if port < 0 || port > 65535 {
 		return errors.New("--port deve essere compresa tra 0 e 65535")
+	}
+	explicitWorkspace := false
+	flags.Visit(func(f *flag.Flag) { explicitWorkspace = explicitWorkspace || f.Name == "workspace" })
+	if command == "tui" && !explicitWorkspace {
+		selected, err := tui.ChooseNetwork(ctx, terminal.New(os.Stdout, terminal.Enabled()))
+		if err != nil || selected == "" {
+			return err
+		}
+		*workspace = selected
 	}
 	root, err := filepath.Abs(*workspace)
 	if err != nil {
@@ -269,8 +279,16 @@ func live(parent context.Context, command, root string, port int, browse bool, c
 		<-ctx.Done()
 	} else {
 		surface := terminal.New(os.Stdout, terminal.Enabled())
-		model := tui.New(ctx, root, url, cfg, store, manager).WithSurface(surface)
+		snapshot, _ := store.Snapshot()
+		if err := network.Remember(root, cfg.Project, snapshot); err != nil {
+			store.Log("Note Network recenti: " + err.Error())
+		}
+		model := tui.New(ctx, root, url, cfg, store, manager).WithSurface(surface).WithSession()
 		_, err = tea.NewProgram(model, tea.WithContext(ctx), tea.WithAltScreen(), tea.WithOutput(surface), tea.WithMouseAllMotion(), tea.WithFPS(60)).Run()
+		snapshot, _ = store.Snapshot()
+		if rememberErr := network.Remember(root, cfg.Project, snapshot); rememberErr != nil {
+			fmt.Fprintln(os.Stderr, "Note Network recenti:", rememberErr)
+		}
 		if ctx.Err() != nil && errors.Is(err, tea.ErrProgramKilled) {
 			err = nil
 		}

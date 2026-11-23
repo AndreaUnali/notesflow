@@ -49,11 +49,16 @@ type Tools struct {
 	PDF         string `json:"pdf,omitempty"`
 }
 
+type Agent struct {
+	QuestionSeconds int `json:"question_seconds"`
+}
+
 type Config struct {
 	Project   string    `json:"project"`
 	Providers Providers `json:"providers"`
 	Semantic  Semantic  `json:"semantic"`
 	Tools     Tools     `json:"tools"`
+	Agent     Agent     `json:"agent"`
 }
 
 func Load(root, filename string) (Config, error) {
@@ -61,6 +66,7 @@ func Load(root, filename string) (Config, error) {
 		Project:   filepath.Base(root),
 		Providers: Providers{Mode: "byok", Active: "locale", Profiles: []Profile{{ID: "locale", Driver: "mock", Model: "affinità lessicale"}}},
 		Semantic:  Semantic{Enabled: true, CandidateLimit: 20, DeltaRunes: 4000},
+		Agent:     Agent{QuestionSeconds: 90},
 		Tools:     Tools{NvimServer: os.Getenv("NVIM"), LatexEngine: "latexmk", PDFViewer: "Skim"},
 	}
 	explicit := filename != ""
@@ -87,6 +93,9 @@ func Load(root, filename string) (Config, error) {
 }
 
 func (cfg Config) validate() error {
+	if cfg.Agent.QuestionSeconds < 1 || cfg.Agent.QuestionSeconds > 3600 {
+		return errors.New("agent.question_seconds deve essere 1–3600")
+	}
 	if cfg.Semantic.CandidateLimit < 1 || cfg.Semantic.CandidateLimit > 100 || cfg.Semantic.DeltaRunes < 1 || cfg.Semantic.DeltaRunes > 16000 {
 		return errors.New("semantic: candidate_limit deve essere 1–100 e delta_runes 1–16000")
 	}

@@ -31,6 +31,7 @@ type graphRenderKey struct {
 	ratio, zoom            float64
 	pan                    point
 	dragVersion            uint64
+	ambience               bool
 }
 
 type renderedGraph struct {
@@ -277,6 +278,10 @@ func renderGraph(g terminalGraph, key graphRenderKey) renderedGraph {
 		d.DrawString(item.caption)
 		d.Src, d.Dot = image.NewUniform(item.shade), item.at
 		d.DrawString(item.caption)
+	}
+	if key.ambience {
+		draw.DrawMask(img, img.Bounds(), image.NewUniform(surfaceRGB), image.Point{},
+			image.NewUniform(color.Alpha{A: 160}), image.Point{}, draw.Over)
 	}
 	graphic, _ := terminal.Image(img)
 	return renderedGraph{key: key, graphic: graphic, points: points, width: w, height: h, scale: scale}

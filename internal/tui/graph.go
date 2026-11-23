@@ -102,7 +102,7 @@ func (m *Model) enterGraph(id string) tea.Cmd {
 		return nil
 	}
 	if node, ok := m.graphNode(); ok {
-		return m.openEditor(source{node.File, node.Line}, false)
+		return m.openEditor(source{node.File, node.Line})
 	}
 	return nil
 }

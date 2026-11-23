@@ -13,9 +13,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/AndreaUnali/notesflow/internal/agent"
 	"github.com/AndreaUnali/notesflow/internal/config"
 	"github.com/AndreaUnali/notesflow/internal/editor"
 	"github.com/AndreaUnali/notesflow/internal/graph"
+	"github.com/AndreaUnali/notesflow/internal/network"
 	"github.com/AndreaUnali/notesflow/internal/palette"
 	"github.com/AndreaUnali/notesflow/internal/parser"
 	"github.com/AndreaUnali/notesflow/internal/providers"
@@ -31,6 +33,8 @@ const (
 	activityTab
 	apiTab
 )
+
+const visibleTabCount = activityTab + 1
 
 const (
 	mainFocus = iota
@@ -77,13 +81,19 @@ type Model struct {
 	editorBusy                bool
 	editorFrame               editor.Frame
 	editorWidth, editorHeight int
-	lastFile                  string
+	lastFile, editorCourse    string
 	quitting                  bool
+	positionBusy, chapterBusy bool
+	session                   *network.Session
+	choice                    workspaceChoice
+	form                      inputForm
+	agents                    agentUI
 
 	pdf                pdfState
 	pdfPage, pdfOffset int
 	pdfText            bool
 	pdfBusy, compiling bool
+	lastCompile        string
 
 	canvas           terminalGraph
 	graphSearch      bool
@@ -129,6 +139,7 @@ type opened struct {
 	instance *editor.Editor
 	err      error
 	file     string
+	course   string
 	started  bool
 }
 type editorFrame struct {
@@ -137,8 +148,9 @@ type editorFrame struct {
 	closed   bool
 }
 type quitCheck struct {
-	unsaved bool
-	err     error
+	unsaved  bool
+	err      error
+	position positionResult
 }
 
 func refresh() tea.Cmd {
@@ -146,7 +158,7 @@ func refresh() tea.Cmd {
 }
 
 func (m Model) Init() tea.Cmd {
-	return func() tea.Msg { return tick(time.Now()) }
+	return tea.Batch(func() tea.Msg { return tick(time.Now()) }, m.titleCmd())
 }
 
 func waitEditor(ctx context.Context, e *editor.Editor) tea.Cmd {
@@ -166,6 +178,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	next, cmd := m.update(msg)
 	if (m.tab == editorTab) != (next.tab == editorTab) {
 		cmd = tea.Batch(cmd, next.beginTransition())
+		if m.tab == editorTab && m.course == next.course {
+			cmd = tea.Batch(cmd, next.capturePosition())
+		}
+	}
+	if next.course != m.course {
+		cmd = tea.Batch(cmd, next.titleCmd())
 	}
 	if next.tab == graphTab {
 		next.prepareGraphic()
@@ -181,7 +199,12 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 			m.prepareGraph()
 		}
 		cmd := m.probePDF()
-		return m, tea.Batch(refresh(), cmd)
+		agentCmd := m.advanceAgent(time.Time(v))
+		var position tea.Cmd
+		if m.tab == editorTab {
+			position = m.capturePosition()
+		}
+		return m, tea.Batch(refresh(), cmd, agentCmd, position)
 	case tea.WindowSizeMsg:
 		m.width, m.height = v.Width, v.Height
 		m.resizeEditor()
@@ -195,10 +218,13 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 	case compiled:
 		m.compiling = false
+		m.lastCompile = ""
 		m.message = "PDF aggiornato · " + filepath.Base(v.file)
 		if v.err != nil {
 			m.message = "Compilazione fallita · " + strings.SplitN(v.err.Error(), "\n", 2)[0] + " · vedi 5 Attività"
 			m.store.Log(v.err.Error())
+			log := []rune(strings.ReplaceAll(v.err.Error(), m.root+string(filepath.Separator), ""))
+			m.lastCompile = string(log[:min(3500, len(log))])
 		}
 		cmd := m.probePDF()
 		return m, cmd
@@ -215,7 +241,7 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 		if v.err != nil {
 			m.message = "Neovim · " + v.err.Error()
 		} else if v.file != "" {
-			m.lastFile = v.file
+			m.lastFile, m.editorCourse = v.file, v.course
 		}
 		if v.started && m.editor != nil {
 			m.resizeEditor()
@@ -235,8 +261,33 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 			m.editorFrame = v.frame
 			return m, waitEditor(m.ctx, v.instance)
 		}
+	case positionResult:
+		m.positionBusy = false
+		m.savePosition(v)
+	case chapterResult:
+		m.chapterBusy = false
+		if v.err != nil {
+			m.form.error = v.err.Error()
+			break
+		}
+		m.form = inputForm{}
+		cmd := m.openEditor(source{v.plan.File, 1})
+		return m, cmd
+	case agentContext:
+		file, _ := filepath.Rel(m.root, v.position)
+		m.showAgentForm("ask", 0, filepath.ToSlash(file), v.line)
+		m.form.buffer, m.form.bufferFile = v.buffer, filepath.ToSlash(file)
+	case agentResult:
+		m.finishAgent(v)
+		cmd := m.advanceAgent(time.Now())
+		return m, cmd
+	case appliedAgent:
+		m.appliedAgent(v)
+		cmd := m.advanceAgent(time.Now())
+		return m, cmd
 	case quitCheck:
 		m.quitting = false
+		m.savePosition(v.position)
 		if v.err != nil {
 			m.message = v.err.Error()
 		} else if v.unsaved {
@@ -258,6 +309,14 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 
 func (m Model) key(key tea.KeyMsg) (Model, tea.Cmd) {
 	s := key.String()
+	if m.form.mode != "" {
+		cmd := m.formKey(key)
+		return m, cmd
+	}
+	if len(m.choice.options) > 0 && !key.Paste {
+		cmd := m.workspaceKey(s)
+		return m, cmd
+	}
 	if m.commandMode {
 		if !key.Paste {
 			cmd := m.navigate(s)
@@ -270,6 +329,9 @@ func (m Model) key(key tea.KeyMsg) (Model, tea.Cmd) {
 		return m, nil
 	}
 	if !key.Paste && m.focus == mainFocus && m.tab != editorTab && !m.graphSearch {
+		if cmd, ok := m.agentDetailKey(s); ok {
+			return m, cmd
+		}
 		if cmd, ok := m.command(s); ok {
 			return m, cmd
 		}
@@ -286,7 +348,7 @@ func (m Model) key(key tea.KeyMsg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		if s == "enter" && !m.editorBusy {
-			cmd := m.openEditor(source{m.lastFile, 1}, false)
+			cmd := m.openEditorAt(m.savedPosition())
 			return m, cmd
 		}
 		return m, nil
@@ -326,9 +388,9 @@ func (m Model) key(key tea.KeyMsg) (Model, tea.Cmd) {
 	case "tab", "shift+tab":
 		step := 1
 		if s == "shift+tab" {
-			step = 4
+			step = visibleTabCount - 1
 		}
-		tab := (m.tab + step) % 5
+		tab := (m.tab + step) % visibleTabCount
 		cmd := m.setTab(tab)
 		return m, cmd
 	case "down", "j", "up", "k", "pgdown", "pgup":
@@ -404,7 +466,7 @@ func (m Model) key(key tea.KeyMsg) (Model, tea.Cmd) {
 
 // navigate moves within the tab bar without sending keys to the active pane.
 func (m *Model) navigate(key string) tea.Cmd {
-	const count = activityTab + 1
+	const count = visibleTabCount
 	switch key {
 	case "left", "h":
 		m.navTab = (m.navTab + count - 1) % count
@@ -426,7 +488,12 @@ func (m *Model) navigate(key string) tea.Cmd {
 func (m *Model) command(key string) (tea.Cmd, bool) {
 	switch key {
 	case "1", "2", "3", "4", "5":
+		if key == "5" && m.agents.notice.id > 0 {
+			return m.openAgentActivity(m.agents.notice.id), true
+		}
 		return m.setTab(int(key[0] - '1')), true
+	case "?":
+		return m.startAgentContext(), true
 	case "r":
 		if m.focus == roadFocus {
 			m.focus = mainFocus
@@ -458,8 +525,9 @@ func (m *Model) command(key string) (tea.Cmd, bool) {
 	case "b":
 		return m.compile(), true
 	case "c":
+		position := m.capturePosition()
 		m.nextCourse()
-		return m.probePDF(), true
+		return tea.Batch(position, m.probePDF()), true
 	case "q":
 		return m.quit(), true
 	case "a":
@@ -471,21 +539,16 @@ func (m *Model) command(key string) (tea.Cmd, bool) {
 func (m *Model) setTab(tab int) tea.Cmd {
 	m.tab, m.cursor, m.focus, m.graphSearch = tab, 0, mainFocus, false
 	m.commandMode = false
+	m.agents.detail, m.agents.offset = 0, 0
 	m.graphDrag, m.graphHover = dragState{}, ""
 	switch tab {
 	case editorTab:
-		if m.editor == nil {
-			file := m.lastFile
-			if file == "" {
-				file = m.mainTeX()
+		if m.editor == nil || m.editorCourse != m.course {
+			pos := m.savedPosition()
+			if pos.File == "" {
+				pos.File = m.suggestedFile()
 			}
-			if file == "" {
-				files := m.files()
-				if len(files) > 0 {
-					file = files[0].file
-				}
-			}
-			return m.openEditor(source{file, 1}, false)
+			return m.openEditorAt(pos)
 		}
 		m.resizeEditor()
 	case graphTab:
@@ -549,14 +612,14 @@ func (m *Model) sideKey(s string) tea.Cmd {
 	case "e":
 		if len(items) > 0 {
 			if evidence := items[min(m.roadCursor, len(items)-1)].Evidence; evidence != nil {
-				return m.openEditor(source{evidence.File, evidence.Line}, false)
+				return m.openEditor(source{evidence.File, evidence.Line})
 			}
 		}
 	case "enter":
 		if len(items) > 0 {
 			item := items[min(m.roadCursor, len(items)-1)]
 			if item.editable {
-				return m.openEditor(item.source, false)
+				return m.openEditor(item.source)
 			}
 		}
 	}
@@ -575,17 +638,19 @@ func (m *Model) activate() tea.Cmd {
 		case 0:
 			return m.setTab(editorTab)
 		case 1:
-			return m.compile()
+			m.form = inputForm{mode: "chapter"}
 		case 2:
-			return m.setTab(graphTab)
+			pos := m.savedPosition()
+			m.showAgentForm("delegate", 0, m.suggestedFile(), pos.Line)
 		case 3:
-			return m.setTab(todoTab)
-		case 4:
-			return m.openEditor(source{}, true)
-		case 5:
-			return m.setTab(apiTab)
-		case 6:
-			return m.setTab(activityTab)
+			m.cursor = min(m.cursor+1, len(m.rows())-1)
+		}
+		return nil
+	}
+	if m.tab == activityTab {
+		jobs := m.agentTasks()
+		if m.cursor < len(jobs) {
+			return m.openAgentActivity(jobs[m.cursor].ID)
 		}
 	}
 	rows := m.rows()
@@ -594,12 +659,16 @@ func (m *Model) activate() tea.Cmd {
 	}
 	target := rows[min(m.cursor, len(rows)-1)].source
 	if target.file != "" {
-		return m.openEditor(target, false)
+		return m.openEditor(target)
 	}
 	return nil
 }
 
-func (m *Model) openEditor(target source, agent bool) tea.Cmd {
+func (m *Model) openEditor(target source) tea.Cmd {
+	return m.openEditorAt(network.Position{File: target.file, Line: target.line})
+}
+
+func (m *Model) openEditorAt(target network.Position) tea.Cmd {
 	if m.editorBusy {
 		return nil
 	}
@@ -608,14 +677,14 @@ func (m *Model) openEditor(target source, agent bool) tea.Cmd {
 	m.message = ""
 	width, height := m.editorSize()
 	m.editorWidth, m.editorHeight = width, height
-	current, ctx, root, dir := m.editor, m.ctx, m.root, m.scopeDir()
+	current, ctx, root, course := m.editor, m.ctx, m.root, m.course
 	return func() tea.Msg {
 		var path string
 		var err error
 		e := current
 		started := false
-		if target.file != "" {
-			path, err = workflow.WorkspaceFile(root, target.file)
+		if target.File != "" {
+			path, err = workflow.WorkspaceFile(root, target.File)
 			if err != nil {
 				return opened{instance: e, err: err}
 			}
@@ -627,13 +696,10 @@ func (m *Model) openEditor(target source, agent bool) tea.Cmd {
 			}
 			started = true
 		}
-		switch {
-		case agent:
-			err = e.Agent(ctx, dir)
-		case path != "":
-			err = e.Open(ctx, path, target.line)
+		if path != "" {
+			err = e.OpenAt(ctx, path, target)
 		}
-		return opened{instance: e, err: err, file: target.file, started: started}
+		return opened{instance: e, err: err, file: target.File, course: course, started: started}
 	}
 }
 
@@ -655,7 +721,7 @@ func (m *Model) quit() tea.Cmd {
 		return tea.Quit
 	}
 	m.quitting = true
-	e, ctx := m.editor, m.ctx
+	e, ctx, course := m.editor, m.ctx, m.editorCourse
 	return func() tea.Msg {
 		select {
 		case <-e.Done():
@@ -663,7 +729,8 @@ func (m *Model) quit() tea.Cmd {
 		default:
 		}
 		changed, err := e.Unsaved(ctx)
-		return quitCheck{changed, err}
+		pos, _ := e.Position(ctx)
+		return quitCheck{unsaved: changed, err: err, position: positionResult{editor: e, course: course, pos: pos}}
 	}
 }
 
@@ -725,6 +792,9 @@ func (m Model) scopeName() string {
 	case "":
 		return "Tutti i corsi"
 	case rootCourse:
+		if m.cfg.Project != "" {
+			return m.cfg.Project
+		}
 		return filepath.Base(m.root)
 	default:
 		return m.course
@@ -737,19 +807,30 @@ func (m Model) fileInScope(file string) bool {
 
 func (m Model) tasks(filtered bool) []parser.Task {
 	var tasks []parser.Task
+	matches := func(task parser.Task) bool {
+		return m.fileInScope(task.File) && (!filtered || m.taskKind == "" || m.taskKind == task.Kind)
+	}
 	for _, task := range m.snapshot.Tasks {
-		if m.fileInScope(task.File) && (!filtered || m.taskKind == "" || m.taskKind == task.Kind) {
+		if matches(task) {
 			tasks = append(tasks, task)
 		}
 	}
+	for _, job := range m.agentTasks() {
+		if !(job.State == agent.Review && job.Automatic) && !(job.State == agent.Completed && job.Buffered) {
+			continue
+		}
+		for _, task := range agent.Tasks(job) {
+			if job.State == agent.Review && task.Kind != parser.MaintenanceTask {
+				continue
+			}
+			if matches(task) && !slices.ContainsFunc(tasks, func(item parser.Task) bool {
+				return item.File == task.File && item.Kind == task.Kind && item.Text == task.Text
+			}) {
+				tasks = append(tasks, task)
+			}
+		}
+	}
 	return tasks
-}
-
-var homeActions = []string{
-	"2   Scrivi appunti", "b   Compila il PDF",
-	"3   Esplora il grafo", "4   Consulta e riassumi i TODO",
-	"     Avvia OpenCode nel corso", " a   Dashboard API e quote",
-	"5   Consulta l’attività",
 }
 
 func (m Model) files() []source {
@@ -766,16 +847,7 @@ func (m Model) rows() []row {
 	var rows []row
 	switch m.tab {
 	case homeTab:
-		for _, action := range homeActions {
-			rows = append(rows, row{text: action})
-		}
-		for i, file := range m.files() {
-			text := file.file
-			if i == 0 {
-				text = "File · " + text
-			}
-			rows = append(rows, row{text: text, source: file})
-		}
+		return m.homeRows()
 	case apiTab:
 		status := m.manager.Snapshot()
 		rows = append(rows, row{text: "Modalità " + status.Mode})
@@ -817,6 +889,13 @@ func (m Model) rows() []row {
 			rows = append(rows, row{fmt.Sprintf("%s · %s  (%s:%d)", task.Kind, task.Text, task.File, task.Line), source{task.File, task.Line}})
 		}
 	case activityTab:
+		for _, job := range m.agentTasks() {
+			label := "Chiedi"
+			if job.Write {
+				label = "Delega"
+			}
+			rows = append(rows, row{text: fmt.Sprintf("%s · %s · %s", label, job.Target.Title, job.State)})
+		}
 		events := m.store.Activity()
 		for i := len(events) - 1; i >= 0; i-- {
 			event := events[i]
@@ -835,4 +914,12 @@ func clean(text string) string {
 		}
 		return r
 	}, text)
+}
+
+func (m Model) titleCmd() tea.Cmd {
+	name := m.cfg.Project
+	if m.course != "" && m.course != rootCourse {
+		name = m.course
+	}
+	return tea.SetWindowTitle("Notesflow · " + clean(name))
 }

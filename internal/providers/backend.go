@@ -86,7 +86,12 @@ func openCode(ctx context.Context, model, prompt string) (string, error) {
 		return "", err
 	}
 	defer os.RemoveAll(dir)
-	cmd := exec.CommandContext(ctx, "opencode", "run", "--model", model, "--format", "json", "--", prompt)
+	args := []string{"run", "--format", "json"}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	args = append(args, "--", prompt)
+	cmd := exec.CommandContext(ctx, "opencode", args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "OPENCODE_CONFIG_CONTENT={\"permission\":{\"*\":\"deny\"}}")
 	pipe, err := cmd.StdoutPipe()

@@ -32,6 +32,9 @@
     "candidate_limit": 20,
     "delta_runes": 4000
   },
+  "agent": {
+    "question_seconds": 90
+  },
   "tools": {
     "nvim_server": "",
     "latex_engine": "latexmk",

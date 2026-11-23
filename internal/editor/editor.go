@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -113,18 +112,6 @@ func (e *Editor) Open(ctx context.Context, file string, line int) error {
 		return v.ExecLua(`local path, line = ...
 vim.cmd('hide edit ' .. vim.fn.fnameescape(path))
 vim.api.nvim_win_set_cursor(0, {math.min(line, vim.api.nvim_buf_line_count(0)), 0})`, nil, file, max(1, line))
-	})
-}
-
-func (e *Editor) Agent(ctx context.Context, dir string) error {
-	if _, err := exec.LookPath("opencode"); err != nil {
-		return err
-	}
-	return e.request(ctx, func(v *nvim.Nvim) error {
-		return v.ExecLua(`local dir = ...
-vim.cmd('hide enew')
-assert(vim.fn.termopen({'opencode'}, {cwd=dir}) > 0, 'OpenCode non avviato')
-vim.cmd.startinsert()`, nil, dir)
 	})
 }
 

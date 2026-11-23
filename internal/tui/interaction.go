@@ -62,7 +62,13 @@ type dragState struct {
 
 func (m *Model) mouse(event tea.MouseEvent) tea.Cmd {
 	click := event.Button == tea.MouseButtonLeft && event.Action == tea.MouseActionPress
+	if m.form.mode != "" || len(m.choice.options) > 0 {
+		return nil
+	}
 	if click {
+		if m.noticeRect().contains(event.X, event.Y) {
+			return m.openAgentActivity(m.agents.notice.id)
+		}
 		m.commandMode = false
 		for _, tab := range m.tabs() {
 			if tab.hit.contains(event.X, event.Y) {
@@ -118,12 +124,13 @@ func (m *Model) mouse(event tea.MouseEvent) tea.Cmd {
 			rows := m.sidebarTasks(side.cols-2, l.todo-3)
 			if i := row - 1; i < len(rows) && rows[i].task >= 0 {
 				task := m.sidebarItems()[rows[i].task]
-				return m.openEditor(source{task.File, task.Line}, false)
+				return m.openEditor(source{task.File, task.Line})
 			}
 			return m.openSidebarList()
 		}
 	}
-	if main.contains(event.X, event.Y) && m.tab != editorTab && m.tab != graphTab && !(m.tab == todoTab && m.showSummary) {
+	if main.contains(event.X, event.Y) && m.tab != editorTab && m.tab != graphTab &&
+		!(m.tab == todoTab && m.showSummary) && !(m.tab == activityTab && m.agents.detail != 0) {
 		m.focus = mainFocus
 		items := m.rows()
 		i := listStart(m.cursor, len(items), main.rows) + event.Y - main.y

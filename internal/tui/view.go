@@ -94,8 +94,14 @@ func (m Model) View() string {
 		title := "Operazioni del corso"
 		width, height := l.left-2, l.body-2
 		var main []string
-		switch m.tab {
-		case editorTab:
+		switch {
+		case len(m.choice.options) > 0:
+			title = m.choice.kind
+			main = m.workspaceRows(height)
+		case m.form.mode != "":
+			title = m.formTitle()
+			main = m.formRows(width)
+		case m.tab == editorTab:
 			title = "Scrittura"
 			if mode := m.editorFrame.Mode(); mode != "" {
 				title += " · " + editorMode(mode)
@@ -111,10 +117,10 @@ func (m Model) View() string {
 			default:
 				main = m.editorFrame.Rows()
 			}
-		case graphTab:
+		case m.tab == graphTab:
 			title = "Grafo del corso"
 			main = m.graphRows(width, height)
-		case todoTab:
+		case m.tab == todoTab:
 			title = "TODO del corso"
 			if m.taskKind != "" {
 				title = "TODO · " + m.taskKind
@@ -125,10 +131,16 @@ func (m Model) View() string {
 			} else {
 				main = m.listRows(height)
 			}
-		case activityTab:
+		case m.tab == activityTab:
 			title = "Attività"
-			main = m.listRows(height)
-		case apiTab:
+			if job, ok := m.selectedAgentJob(); ok {
+				title += " · " + job.Target.Title
+				lines := m.agentDetailLines(job, width)
+				main = lines[min(m.agents.offset, max(0, len(lines)-1)):]
+			} else {
+				main = m.listRows(height)
+			}
+		case m.tab == apiTab:
 			title = "Dashboard API"
 			main = m.listRows(height)
 		default:
@@ -159,9 +171,6 @@ func (m Model) View() string {
 	}
 	lines = append(lines, m.roadRows(l.road)...)
 	lines = append(lines, muted.Render(fit(m.help(), m.width)), fit(clean(m.message), m.width), accent.Render(fit(m.status(), m.width)))
-	for i, line := range lines {
-		lines[i] = background(fit(line, m.width))
-	}
 	var images []terminal.Placement
 	if p := m.pdfPlacement(); p.Graphic != nil {
 		images = append(images, p)
@@ -169,6 +178,10 @@ func (m Model) View() string {
 	if m.tab == graphTab && m.graphSurface.graphic != nil {
 		r := m.graphRect()
 		images = append(images, terminal.Placement{Graphic: m.graphSurface.graphic, X: r.x, Y: r.y, Cols: r.cols, Rows: r.rows})
+	}
+	lines, images = m.overlayNotice(lines, images)
+	for i, line := range lines {
+		lines[i] = background(fit(line, m.width))
 	}
 	lines[0] = m.surface.Marker(images) + lines[0]
 	return strings.Join(lines[:min(m.height, len(lines))], "\n")
@@ -213,10 +226,10 @@ func (m Model) header(l layout) []string {
 	}
 	first, second := " r Roadmap   R Mostra/nascondi   p PDF   t TODO", " b Compila   c Corso   q Esci"
 	if m.commandMode {
-		first = " ←/→ schede · Invio apri · Tab torna"
+		first = " 1–5 Schede · ? Agente · Tab torna"
 		second = " r/R Roadmap · p PDF · t TODO · b Compila · c Corso · q Esci"
 	} else if m.tab == editorTab || m.focus != mainFocus {
-		first = " Shift+Tab · Focus sulle schede"
+		first = " Shift+Tab per navigare · Shift+Tab poi ? per chiedere all’agente"
 		second = ""
 	}
 	if l.header == 3 {
@@ -260,10 +273,10 @@ func (m Model) listRows(height int) []string {
 	rows := []string{}
 	for i := start; i < min(len(items), start+height); i++ {
 		label := clean(items[i].text)
-		if m.tab == homeTab && i < len(homeActions) && m.layout().left >= 70 {
-			label = fit(label, 32) + muted.Render(homeDetails[i])
+		if m.tab == homeTab && i < len(homeActions)-1 && m.layout().left >= 82 {
+			label = fit(label, 42) + muted.Render(homeDetails[i])
 		}
-		if i == cursor && m.tab != activityTab && m.tab != apiTab {
+		if i == cursor && m.tab != apiTab {
 			rows = append(rows, accent.Render(" › "+label))
 		} else {
 			rows = append(rows, "   "+label)
@@ -277,8 +290,8 @@ func listStart(cursor, length, height int) int {
 }
 
 var homeDetails = []string{
-	"Riprendi la sessione di scrittura", "Aggiorna l’anteprima", "Segui i collegamenti tra gli appunti",
-	"Apri le note da completare", "Lavora con un agente nel corso", "Controlla modello e disponibilità", "Leggi gli aggiornamenti del corso",
+	"Riprendi la posizione di scrittura", "Crea il sorgente e aggiorna l’indice",
+	"Assegna un lavoro e scegli le fonti",
 }
 
 func (m Model) summaryRows() []string {
@@ -298,6 +311,10 @@ func (m Model) summaryRows() []string {
 
 func (m Model) help() string {
 	switch {
+	case len(m.choice.options) > 0:
+		return " ↑↓ Seleziona · Invio Conferma · Esc Salta"
+	case m.form.mode != "":
+		return " Esc Torna"
 	case m.focus == roadFocus:
 		items := m.milestones()
 		if len(items) > 0 {
@@ -312,11 +329,13 @@ func (m Model) help() string {
 	case m.focus == pdfFocus:
 		return " ←/→ pagina · ↑/↓ scorri testo · t testo/pagina · Esc torna"
 	case m.tab == editorTab:
-		return " :w Salva   Shift+Tab naviga   Shift+Tab poi b compila"
+		return " :w Salva · Shift+Tab poi ? Agente · Shift+Tab poi b Compila"
 	case m.tab == graphTab:
 		return " / Cerca · ↑↓ Nodi · Invio entra/apri · Esc torna · Pg↑/Pg↓ pagina · f Filtra · +/− zoom"
 	case m.tab == todoTab:
 		return " ↑↓ Scorri · f Tipo · s Riepilogo · v Lista · Invio Apri"
+	case m.tab == activityTab && m.agents.detail != 0 && m.agents.book != nil:
+		return m.foldAgentHelp()
 	default:
 		return " ↑↓ Scorri · Invio Seleziona · Tab Cambia vista · a API"
 	}
@@ -438,7 +457,11 @@ func (m Model) roadRows(height int) []string {
 }
 
 func (m Model) status() string {
-	state := m.manager.Snapshot()
+	provider := m.manager
+	if provider == nil {
+		return " " + clean(m.cfg.Project)
+	}
+	state := provider.Snapshot()
 	current := "provider in attesa"
 	if len(state.Profiles) > 0 {
 		profile := state.Profiles[0]
@@ -455,5 +478,9 @@ func (m Model) status() string {
 			current += " → " + profile.WindowEnd.Local().Format("15:04")
 		}
 	}
-	return " " + clean(m.cfg.Project) + "  │  " + current
+	project := " " + clean(m.cfg.Project)
+	if status := m.agentStatus(); status != "" {
+		return project + "  │  " + status + "  │  " + current
+	}
+	return project + "  │  " + current
 }

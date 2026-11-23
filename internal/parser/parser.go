@@ -102,7 +102,7 @@ type Document struct {
 }
 
 var (
-	taskRE     = regexp.MustCompile(`(?i)^\s*TODO\s*(VISUAL)?\s*:\s*(.+?)\s*$`)
+	taskRE     = regexp.MustCompile(`(?i)^\s*TODO\s*(VISUAL|MANUTENZIONE)?\s*:\s*(.+?)\s*$`)
 	headingRE  = regexp.MustCompile(`^\s*(#{1,6})\s+(.+?)\s*#*\s*$`)
 	checkboxRE = regexp.MustCompile(`^(\s*)(?:[-+*]|\d+[.)])\s+\[([ xX])\]\s+(.+?)\s*$`)
 	bulletRE   = regexp.MustCompile(`^(\s*)(?:[-+*]|\d+[.)])\s+(.+?)\s*$`)
@@ -217,7 +217,7 @@ func Parse(file string, data []byte) Document {
 				section := doc.Sections[current]
 				kind := "TODO"
 				if task[1] != "" {
-					kind = "VISUAL"
+					kind = strings.ToUpper(task[1])
 				}
 				doc.Tasks = append(doc.Tasks, Task{section.ID, file, number, section.Title, kind, task[2]})
 			}
