@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 )
 
@@ -34,14 +33,6 @@ func WorkspaceFile(root, file string) (string, error) {
 		return "", errors.New("atteso un file regolare")
 	}
 	return absolute, nil
-}
-
-func Edit(ctx context.Context, root, file string, line int) (*exec.Cmd, error) {
-	path, err := WorkspaceFile(root, file)
-	if err != nil {
-		return nil, err
-	}
-	return exec.CommandContext(ctx, "nvim", "+"+strconv.Itoa(max(1, line)), "--", path), nil
 }
 
 func RemoteEdit(ctx context.Context, root, socket, file string, line int) error {

@@ -30,7 +30,7 @@ import (
 
 const usage = `Uso: notesflow [comando] [opzioni]
 
-  tui        TUI e server del grafo incorporato (predefinito)
+  tui        Workspace interattivo nel terminale (predefinito)
   serve      Server del grafo e watcher in primo piano
   index      Scansione locale e snapshot JSON
   todos      Elenca o riassume i TODO
@@ -229,19 +229,25 @@ func filterTasks(store *graph.Store, kind, section, course string) []parser.Task
 func live(parent context.Context, command, root string, port int, browse bool, cfg config.Config, store *graph.Store, watch *watcher.Watcher, manager *providers.Manager) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
-	server, err := web.Listen(ctx, port, store, func(ctx context.Context, node parser.Node) error {
-		return workflow.RemoteEdit(ctx, root, cfg.Tools.NvimServer, node.File, node.Line)
-	})
-	if err != nil {
-		return err
-	}
+	var server *web.Server
+	var url string
+	var err error
 	failures := make(chan error, 1)
-	go func() {
-		if err := server.Serve(); err != nil {
-			failures <- err
-			cancel()
+	if command == "serve" || browse || port != 0 {
+		server, err = web.Listen(ctx, port, store, func(ctx context.Context, node parser.Node) error {
+			return workflow.RemoteEdit(ctx, root, cfg.Tools.NvimServer, node.File, node.Line)
+		})
+		if err != nil {
+			return err
 		}
-	}()
+		url = server.URL
+		go func() {
+			if err := server.Serve(); err != nil {
+				failures <- err
+				cancel()
+			}
+		}()
+	}
 	var workers sync.WaitGroup
 	workers.Go(func() { watch.Run(ctx) })
 	if cfg.Semantic.Enabled {
@@ -249,7 +255,7 @@ func live(parent context.Context, command, root string, port int, browse bool, c
 	}
 	if browse {
 		workers.Go(func() {
-			if err := workflow.Open(ctx, server.URL, ""); err != nil {
+			if err := workflow.Open(ctx, url, ""); err != nil {
 				store.Log("Browser: " + err.Error())
 				if command == "serve" {
 					fmt.Fprintln(os.Stderr, "Browser:", err)
@@ -258,10 +264,10 @@ func live(parent context.Context, command, root string, port int, browse bool, c
 		})
 	}
 	if command == "serve" {
-		fmt.Println(server.URL)
+		fmt.Println(url)
 		<-ctx.Done()
 	} else {
-		_, err = tea.NewProgram(tui.New(ctx, root, server.URL, cfg, store, manager), tea.WithContext(ctx), tea.WithAltScreen()).Run()
+		_, err = tea.NewProgram(tui.New(ctx, root, url, cfg, store, manager), tea.WithContext(ctx), tea.WithAltScreen()).Run()
 		if ctx.Err() != nil && errors.Is(err, tea.ErrProgramKilled) {
 			err = nil
 		}
@@ -269,7 +275,9 @@ func live(parent context.Context, command, root string, port int, browse bool, c
 	cancel()
 	shutdown, stop := context.WithTimeout(context.Background(), 3*time.Second)
 	defer stop()
-	err = errors.Join(err, server.Shutdown(shutdown))
+	if server != nil {
+		err = errors.Join(err, server.Shutdown(shutdown))
+	}
 	workers.Wait()
 	select {
 	case failure := <-failures:

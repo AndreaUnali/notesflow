@@ -1,6 +1,6 @@
 # Notesflow
 
-Notesflow è una CLI/TUI Go per consultare appunti LaTeX, roadmap e TODO. Il watcher aggiorna l’indice locale e il grafo incorporato. Neovim, OpenCode, i compilatori LaTeX e i renderer di diagrammi si collegano tramite i rispettivi comandi.
+Notesflow è una CLI/TUI Go per lavorare su appunti LaTeX. La home del corso riunisce le operazioni a sinistra e, a destra, i TODO sopra l’anteprima PDF. Grafo, editor Neovim e roadmap condividono la stessa interfaccia.
 
 ## Avvio rapido
 
@@ -8,12 +8,25 @@ Richiede Go 1.25 o successivo. La demo funziona con dati locali e senza credenzi
 
 ```sh
 go build -o ./notesflow ./cmd/notesflow
-./notesflow tui --workspace examples/workspace
+./notesflow tui --workspace examples/workspace/analisi
 ```
 
-Nella TUI usa **Tab** o **1–5** per passare tra Dashboard/API, Roadmap, Grafo, TODO e Attività. **↑/↓** o **j/k** scorrono le voci, **c** seleziona il corso, **Invio** apre il file alla riga indicata e **g** apre il grafo. Nella scheda TODO, **f** cambia il tipo, **s** genera il riepilogo e **v** torna alla lista. **q** chiude Notesflow.
+La barra superiore mostra le scorciatoie anche durante la scrittura.
 
-Per usare solo il grafo, avvia il server e apri l’URL stampato. Lo stesso processo gestisce il watcher e invia aggiornamenti live al browser tramite SSE.
+| Tasto | Azione |
+| --- | --- |
+| F1 · F2 · F3 · F4 · F5 | Home, Neovim, grafo, TODO, attività |
+| F6 · F7 | Seleziona una tappa della roadmap, espandi o comprimi il diagramma in basso |
+| F8 | Seleziona l’anteprima e cambia pagina con ←/→ |
+| F9 | Compila il documento principale e aggiorna l’anteprima |
+| F10 · F12 | Cambia corso, esci |
+| ↑/↓ · Invio | Naviga nelle operazioni, seleziona o apri il file alla riga indicata |
+
+Il grafo nel terminale usa **/** per cercare, **↑/↓** per scegliere un nodo, **←/→** per spostare la vista, **+/−** per lo zoom e **f** per filtrare. **Invio** apre il nodo in Neovim. Nella scheda TODO, **f** cambia tipo, **s** genera il riepilogo e **v** torna alla lista.
+
+Neovim conserva i buffer e la modalità di scrittura quando cambi vista. Usa **:w** prima di compilare con **F9**. L’anteprima visualizza il PDF prodotto su disco, inclusi i PDF aggiornati da un compilatore esterno. Per averla subito nella demo, premi **F9** alla prima apertura. L’anteprima richiede Poppler (`pdftoppm` e, per contare le pagine, `pdfinfo`).
+
+Per usare la vista Canvas nel browser, avvia il server e apri l’URL stampato. Lo stesso processo gestisce il watcher e invia aggiornamenti live al browser tramite SSE.
 
 ```sh
 ./notesflow serve --workspace examples/workspace --open
@@ -35,11 +48,11 @@ Per impostazione predefinita Notesflow legge `notesflow.json` nella radice del w
 ./notesflow agent --workspace examples/workspace
 ```
 
-- **Neovim**. La TUI può avviare direttamente `nvim`. Per il pulsante nel browser, avvia `nvim --listen /tmp/notesflow-nvim.sock` e imposta `tools.nvim_server` allo stesso valore. Il valore di `NVIM` viene usato come default se disponibile.
-- **LaTeX e Skim**. `compile` usa `latexmk` per default e supporta anche `pdflatex`, `xelatex`, `lualatex` e `tectonic`. Compila il file principale dalla sua directory e genera informazioni SyncTeX. Con `--view` apre il PDF in Skim su macOS, oppure nel visualizzatore di sistema su altre piattaforme. Su macOS, imposta `pdf_viewer` a una stringa vuota per usare il visualizzatore predefinito.
-- **Roadmap**. `roadmap.md` supporta intestazioni, liste e checkbox. L’avanzamento conta le checkbox spuntate. `roadmap.pdf` apre il documento nel visualizzatore e mostra una breve anteprima testuale se `pdftotext` è disponibile.
+- **Neovim**. La TUI avvia `nvim --embed` e visualizza la sua UI RPC nel pannello principale, con la configurazione Neovim dell’utente. Per il pulsante nel browser, avvia `nvim --listen /tmp/notesflow-nvim.sock` e imposta `tools.nvim_server` allo stesso valore. Il valore di `NVIM` viene usato come default se disponibile.
+- **LaTeX e Skim**. `compile` usa `latexmk` per default e supporta anche `pdflatex`, `xelatex`, `lualatex` e `tectonic`. Compila il file principale dalla sua directory e genera informazioni SyncTeX. Imposta `tools.main_tex` o `tools.pdf` nel workspace per scegliere percorsi diversi da quelli rilevati automaticamente. Con `--view` apre il PDF in Skim su macOS, oppure nel visualizzatore di sistema su altre piattaforme. Su macOS, imposta `pdf_viewer` a una stringa vuota per usare il visualizzatore predefinito.
+- **Roadmap**. `roadmap.md` supporta intestazioni, liste e checkbox. L’avanzamento conta le checkbox spuntate. La barra inferiore rappresenta le tappe in ordine, con colori diversi per quelle completate. Per `roadmap.pdf` la barra usa il testo estratto da `pdftotext`.
 - **Mermaid e Pikchr**. `diagram` cerca `mmdc` o `pikchr` nel PATH e scrive l’SVG accanto al sorgente. Il grafo incorporato usa Canvas senza Node, CDN o build frontend.
-- **OpenCode**. `agent` avvia la sessione interattiva nel workspace. Il driver `opencode` avvia le inferenze in una directory temporanea, con permessi per gli strumenti impostati su deny. Autenticazione e modelli si configurano in OpenCode.
+- **OpenCode**. `agent` avvia la sessione dalla CLI. L’operazione OpenCode nella home la ospita in un buffer terminale di Neovim. Il driver `opencode` avvia le inferenze in una directory temporanea, con permessi per gli strumenti impostati su deny. Autenticazione e modelli si configurano in OpenCode.
 
 ## Provider e delta
 
@@ -47,7 +60,7 @@ In modalità **BYOK** si usa il profilo indicato da `providers.active`. In modal
 
 Per ogni modifica, Notesflow confronta gli hash delle sezioni del file e costruisce una richiesta per ciascuna sezione cambiata. La richiesta contiene l’estratto della sezione e al massimo `candidate_limit` schede con ID, titolo e sintesi breve di altri nodi. Una modifica soltanto di posizione non richiede una nuova analisi. L’indice di partenza viene popolato alla prima esecuzione. I delta rimasti in coda vengono ripresi al riavvio e gli archi vengono validati rispetto ai nodi correnti. `semantic.enabled: false` sospende l’invio automatico. `todos --summary` è un’azione separata e invia i TODO che corrispondono ai filtri.
 
-Lo stato in `.notesflow/` contiene l’indice dei file, le sezioni testuali, le ultime 500 variazioni degli hash con una sintesi, i risultati semantici, le finestre di quota e gli ultimi cambi di modello. I file JSON sono sostituiti atomicamente. Una sola istanza alla volta aggiorna il workspace. Il server è in ascolto su `127.0.0.1` e l’apertura di file dal browser accetta gli ID del grafo. Il parser indicizza costrutti LaTeX comuni con risoluzione locale dei riferimenti.
+Lo stato in `.notesflow/` contiene l’indice dei file, le sezioni testuali, le ultime 500 variazioni degli hash con una sintesi, i risultati semantici, le finestre di quota e gli ultimi cambi di modello. I file JSON sono sostituiti atomicamente. Una sola istanza alla volta aggiorna il workspace. La modalità `serve` avvia il server su `127.0.0.1`. L’apertura di file dal browser accetta gli ID del grafo. Il parser indicizza costrutti LaTeX comuni con risoluzione locale dei riferimenti.
 
 ## Struttura del codice
 
@@ -58,7 +71,8 @@ Lo stato in `.notesflow/` contiene l’indice dei file, le sezioni testuali, le 
 | `internal/watcher` | Eventi filesystem, riconciliazione e coda dei delta |
 | `internal/graph` | Indice, nodi, archi, snapshot e storico delle revisioni |
 | `internal/providers` | Backend, pool, quote e riepiloghi |
-| `internal/tui` / `internal/web` | Terminale e grafo Canvas con SSE |
+| `internal/tui` / `internal/web` | Workspace nel terminale e vista Canvas con SSE |
+| `internal/editor` | UI RPC Neovim, input e griglia incorporata |
 | `internal/workflow` | Neovim, LaTeX, Skim e diagrammi |
 | `internal/config` / `internal/storage` | Impostazioni e persistenza JSON |
 

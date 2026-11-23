@@ -45,6 +45,8 @@ type Tools struct {
 	NvimServer  string `json:"nvim_server"`
 	LatexEngine string `json:"latex_engine"`
 	PDFViewer   string `json:"pdf_viewer"`
+	MainTeX     string `json:"main_tex,omitempty"`
+	PDF         string `json:"pdf,omitempty"`
 }
 
 type Config struct {

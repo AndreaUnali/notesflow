@@ -35,6 +35,8 @@
   "tools": {
     "nvim_server": "",
     "latex_engine": "latexmk",
-    "pdf_viewer": "Skim"
+    "pdf_viewer": "Skim",
+    "main_tex": "",
+    "pdf": ""
   }
 }
