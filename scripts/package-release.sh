@@ -14,7 +14,6 @@ output=$(cd "$2" && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-declare -A archive_sha
 for os in darwin linux; do
     for arch in amd64 arm64; do
         target="$os-$arch"
@@ -22,7 +21,6 @@ for os in darwin linux; do
         CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath \
             -ldflags "-s -w -X main.version=$version" -o "$work/notesflow" ./cmd/notesflow
         tar -czf "$output/$archive" -C "$work" notesflow
-        archive_sha[$target]=$(sha256sum "$output/$archive" | cut -d ' ' -f1)
 
         if [[ $os == linux ]]; then
             package="$work/deb-$arch"
@@ -46,48 +44,10 @@ CONTROL
     done
 done
 
-cat > "$output/notesflow.rb" <<FORMULA
-class Notesflow < Formula
-  desc "Terminal workspace for LaTeX notes"
-  homepage "https://github.com/AndreaUnali/notesflow"
-  version "$version"
 
-  on_macos do
-    on_arm do
-      url "https://github.com/AndreaUnali/notesflow/releases/download/$tag/notesflow-$tag-darwin-arm64.tar.gz"
-      sha256 "${archive_sha[darwin-arm64]}"
-    end
-    on_intel do
-      url "https://github.com/AndreaUnali/notesflow/releases/download/$tag/notesflow-$tag-darwin-amd64.tar.gz"
-      sha256 "${archive_sha[darwin-amd64]}"
-    end
-  end
-
-  on_linux do
-    on_arm do
-      url "https://github.com/AndreaUnali/notesflow/releases/download/$tag/notesflow-$tag-linux-arm64.tar.gz"
-      sha256 "${archive_sha[linux-arm64]}"
-    end
-    on_intel do
-      url "https://github.com/AndreaUnali/notesflow/releases/download/$tag/notesflow-$tag-linux-amd64.tar.gz"
-      sha256 "${archive_sha[linux-amd64]}"
-    end
-  end
-
-  depends_on "neovim"
-  depends_on "poppler"
-
-  def install
-    bin.install "notesflow"
-  end
-
-  test do
-    assert_equal "notesflow #{version}", shell_output("#{bin}/notesflow --version").strip
-  end
-end
-FORMULA
+scripts/bottle-release.sh "$tag" "$output"
 
 (
     cd "$output"
-    sha256sum "notesflow-$tag-"*.tar.gz notesflow-linux-*.deb notesflow.rb > SHA256SUMS
+    sha256sum "notesflow-$tag-"*.tar.gz notesflow-linux-*.deb notesflow-*.bottle.tar.gz notesflow-bottle-formula.rb > SHA256SUMS
 )

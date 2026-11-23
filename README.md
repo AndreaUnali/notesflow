@@ -27,7 +27,7 @@ notesflow
 notesflow --workspace /percorso/del/corso
 ```
 
-Il primo comando apre il selettore dei progetti da qualsiasi cartella. Il secondo apre direttamente il corso. L’installazione include Neovim e Poppler per scrivere e vedere i PDF.
+Il primo comando apre il selettore dei progetti da qualsiasi cartella. Il secondo apre direttamente il corso. Il pacchetto Debian include Neovim e Poppler. Se usi Homebrew e ti mancano questi strumenti, installali con `brew install neovim poppler` per scrivere e vedere i PDF.
 
 Per compilare LaTeX serve anche `latexmk`. Su macOS puoi installarlo con `brew install --cask mactex-no-gui` e riaprire il terminale. Su Debian e Ubuntu puoi usare `sudo apt install latexmk texlive-latex-extra`. In Notesflow premi **Shift+Tab**, poi **b**, per compilare e aggiornare l’anteprima. Ghostty e Kitty mostrano grafo e PDF a risoluzione grafica.
 
