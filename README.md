@@ -6,21 +6,47 @@ Scrivi appunti LaTeX, controlla il PDF e segui i collegamenti tra i concetti dal
 
 ## Installa e prova
 
-Su macOS puoi installare le dipendenze con Homebrew.
+### Homebrew
 
 ```sh
-brew install go neovim poppler
-git clone https://github.com/AndreaUnali/notesflow.git
-cd notesflow
-go build -o notesflow ./cmd/notesflow
-./notesflow --workspace examples/workspace/analisi
+brew install AndreaUnali/notesflow/notesflow
 ```
 
-Se ti manca `latexmk`, puoi installare MacTeX con `brew install --cask mactex-no-gui` e riaprire il terminale. Premi **Shift+Tab**, poi **b**, per compilare l’esempio e popolare l’anteprima. Ghostty e Kitty mostrano il grafo e le pagine PDF a risoluzione grafica. Negli altri terminali puoi leggere il testo del PDF e navigare i collegamenti dalla lista del grafo.
+### Debian e Ubuntu
+
+Scarica e installa il [pacchetto della release](https://github.com/AndreaUnali/notesflow/releases/latest) con APT. Sono disponibili build per amd64 e arm64.
+
+```sh
+curl -fL -o notesflow.deb "https://github.com/AndreaUnali/notesflow/releases/latest/download/notesflow-linux-$(dpkg --print-architecture).deb" && sudo apt install ./notesflow.deb
+```
+
+### Apri Notesflow
+
+```sh
+notesflow
+notesflow --workspace /percorso/del/corso
+```
+
+Il primo comando apre il selettore dei progetti da qualsiasi cartella. Il secondo apre direttamente il corso. L’installazione include Neovim e Poppler per scrivere e vedere i PDF.
+
+Per compilare LaTeX serve anche `latexmk`. Su macOS puoi installarlo con `brew install --cask mactex-no-gui` e riaprire il terminale. Su Debian e Ubuntu puoi usare `sudo apt install latexmk texlive-latex-extra`. In Notesflow premi **Shift+Tab**, poi **b**, per compilare e aggiornare l’anteprima. Ghostty e Kitty mostrano grafo e PDF a risoluzione grafica.
+
+Per aggiornare con Homebrew usa `brew upgrade AndreaUnali/notesflow/notesflow`. Su Debian e Ubuntu ripeti il comando di installazione per scaricare il pacchetto più recente.
+
+<details>
+<summary>Compila dal sorgente e prova il corso di esempio</summary>
+
+```sh
+git clone https://github.com/AndreaUnali/notesflow.git
+cd notesflow
+go run ./cmd/notesflow --workspace examples/workspace/analisi
+```
+
+</details>
 
 ## Il primo giro
 
-1. Avvia `./notesflow` e scrivi il nome di una **Note Network**. La ricerca include i recenti e i progetti LaTeX in Scrivania, Documenti e nella cartella corrente. Premi **Ctrl+O** per aggiungere una cartella esistente, oppure incolla il percorso nella ricerca. Se hai già un progetto in mente, usa `./notesflow --workspace /percorso/del/corso`.
+1. Avvia `notesflow` e scrivi il nome di una **Note Network**. La ricerca include i recenti e i progetti LaTeX in Scrivania, Documenti e nella cartella corrente. Premi **Ctrl+O** per aggiungere una cartella esistente, oppure incolla il percorso nella ricerca. Se hai già un progetto in mente, usa `notesflow --workspace /percorso/del/corso`.
 2. In Home, **Riprendi** riapre file e cursore dell’ultima sessione. **Nuovo capitolo** propone il file e il punto in cui includerlo nel documento principale. TODO, PDF e roadmap sono visibili dalla Home.
 3. Premi **Shift+Tab**, poi **2**, per scrivere. Il PDF occupa la colonna destra. Salva con **:w** e compila con **Shift+Tab**, poi **b**.
 4. Premi **Shift+Tab**, poi **3**, per esplorare il grafo con il buffer aperto. Usa **↑/↓** e **Invio** per aprire un nodo, **Esc** per tornare alla panoramica e **/** per cercare una sezione.
