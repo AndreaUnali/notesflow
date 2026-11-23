@@ -17,11 +17,12 @@ import (
 )
 
 type Recent struct {
-	Root   string        `json:"root"`
-	Name   string        `json:"name"`
-	Opened time.Time     `json:"opened"`
-	Nodes  []parser.Node `json:"nodes,omitempty"`
-	Edges  []graph.Edge  `json:"edges,omitempty"`
+	Root    string        `json:"root"`
+	Name    string        `json:"name"`
+	Opened  time.Time     `json:"opened"`
+	Nodes   []parser.Node `json:"nodes,omitempty"`
+	Edges   []graph.Edge  `json:"edges,omitempty"`
+	Indexed bool          `json:"-"`
 }
 
 type Position struct {
@@ -97,26 +98,35 @@ func Remember(root, name string, snapshot graph.Snapshot) error {
 	return storage.Save(path, entries[:min(50, len(entries))])
 }
 
+func searchTerms(value string) string {
+	value = strings.ToLower(strings.NewReplacer("_", " ", "-", " ").Replace(value))
+	return strings.Join(strings.Fields(value), " ")
+}
+
 func Search(entries []Recent, query string) []Recent {
-	query = strings.ToLower(strings.TrimSpace(query))
+	query = searchTerms(query)
+	words := strings.Fields(query)
 	result := slices.Clone(entries)
-	if query != "" {
+	if len(words) > 0 {
 		result = slices.DeleteFunc(result, func(entry Recent) bool {
-			return !strings.Contains(strings.ToLower(entry.Name+" "+entry.Root), query)
+			haystack := searchTerms(entry.Name + " " + entry.Root)
+			return slices.ContainsFunc(words, func(word string) bool { return !strings.Contains(haystack, word) })
 		})
 	}
 	rank := func(name string) int {
+		name = searchTerms(name)
 		switch {
-		case query != "" && strings.EqualFold(name, query):
+		case query != "" && name == query:
 			return 0
-		case query != "" && strings.HasPrefix(strings.ToLower(name), query):
+		case query != "" && strings.HasPrefix(name, query):
 			return 1
 		default:
 			return 2
 		}
 	}
 	slices.SortStableFunc(result, func(a, b Recent) int {
-		return cmp.Or(cmp.Compare(rank(a.Name), rank(b.Name)), b.Opened.Compare(a.Opened))
+		return cmp.Or(cmp.Compare(rank(a.Name), rank(b.Name)), b.Opened.Compare(a.Opened),
+			cmp.Compare(searchTerms(a.Name), searchTerms(b.Name)), cmp.Compare(a.Root, b.Root))
 	})
 	return result
 }

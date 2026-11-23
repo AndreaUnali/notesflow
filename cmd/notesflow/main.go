@@ -139,6 +139,9 @@ func run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	if command == "tui" {
+		cfg.Project = network.DisplayName(root, cfg.Project)
+	}
 	switch command {
 	case "compile":
 		file, err := workflow.Compile(ctx, root, flags.Arg(0), cfg.Tools.LatexEngine)
