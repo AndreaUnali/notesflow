@@ -93,3 +93,5 @@ h3 { margin: 1.2rem 0 .4rem; font-size: .84rem; }
   .heading { align-items: start; }
   .heading button { font-size: .8rem; }
 }
+
+.graph-navigation { display: flex; flex-wrap: wrap; gap: .35rem; margin-bottom: .8rem; }

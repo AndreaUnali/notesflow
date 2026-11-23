@@ -31,12 +31,16 @@ type Activity struct {
 }
 
 type Snapshot struct {
-	Revision uint64           `json:"revision"`
-	Nodes    []parser.Node    `json:"nodes"`
-	Edges    []Edge           `json:"edges"`
-	Tasks    []parser.Task    `json:"tasks"`
-	Roadmaps []parser.Roadmap `json:"roadmaps"`
-	Pending  int              `json:"pending"`
+	Revision      uint64           `json:"revision"`
+	Nodes         []parser.Node    `json:"nodes"`
+	Files         []parser.Node    `json:"files"`
+	Headings      []parser.Node    `json:"headings"`
+	Groups        []Group          `json:"groups"`
+	OverviewEdges []Edge           `json:"overview_edges"`
+	Edges         []Edge           `json:"edges"`
+	Tasks         []parser.Task    `json:"tasks"`
+	Roadmaps      []parser.Roadmap `json:"roadmaps"`
+	Pending       int              `json:"pending"`
 }
 
 type inference struct {
@@ -60,13 +64,16 @@ type diskState struct {
 }
 
 type Store struct {
-	mu       sync.RWMutex
-	path     string
-	state    diskState
-	sections map[string]parser.Section
-	snapshot Snapshot
-	change   chan struct{}
-	activity []Activity
+	mu        sync.RWMutex
+	path      string
+	state     diskState
+	sections  map[string]parser.Section
+	projected map[string]parser.Section
+	explicit  []Edge
+	local     []Edge
+	snapshot  Snapshot
+	change    chan struct{}
+	activity  []Activity
 }
 
 func Open(filename string) (*Store, error) {
@@ -80,7 +87,7 @@ func Open(filename string) (*Store, error) {
 	if store.state.Version != 1 || store.state.Documents == nil || store.state.Inferred == nil {
 		return nil, fmt.Errorf("formato indice non valido: %s", filename)
 	}
-	store.rebuild()
+	store.rebuild(true)
 	return store, nil
 }
 
@@ -145,7 +152,7 @@ func (s *Store) Apply(changed map[string]parser.Document, deleted []string) erro
 		next.Inferred[id] = result
 	}
 	next.History = recordHistory(next.History, s.sections, sections)
-	return s.commit(next)
+	return s.commit(next, true)
 }
 
 func recordHistory(history []revision, before, after map[string]parser.Section) []revision {
@@ -196,7 +203,7 @@ func (s *Store) Pending() []string {
 }
 
 func (s *Store) pending(section parser.Section) bool {
-	if section.Text == "" || parser.IsRoadmap(section.File) {
+	if section.Kind != "section" || section.ContentWords == 0 {
 		return false
 	}
 	old, exists := s.state.Inferred[section.ID]
@@ -207,7 +214,7 @@ func (s *Store) pending(section parser.Section) bool {
 func (s *Store) Delta(id string, limit, textLimit int) (Delta, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	source, exists := s.sections[id]
+	source, exists := s.projected[id]
 	if !exists || !s.pending(source) {
 		return Delta{}, false
 	}
@@ -216,9 +223,22 @@ func (s *Store) Delta(id string, limit, textLimit int) (Delta, bool) {
 		score   int
 	}
 	tokens := Terms(source.Title + " " + clip(source.Text, textLimit))
-	order := make([]ranked, 0, len(s.sections))
-	for _, target := range s.sections {
-		if target.ID == id || target.Text == "" || parser.IsRoadmap(target.File) {
+	blocked := map[string]bool{}
+	for _, edge := range s.snapshot.Edges {
+		if edge.Kind == "semantic" {
+			continue
+		}
+		if edge.Source == id {
+			blocked[edge.Target] = true
+		}
+		if edge.Target == id {
+			blocked[edge.Source] = true
+		}
+	}
+	order := make([]ranked, 0, len(s.projected))
+	for _, target := range s.projected {
+		if target.ID == id || blocked[target.ID] || target.Kind != "section" || target.ContentWords == 0 ||
+			isAncestor(s.sections, id, target.ID) || isAncestor(s.sections, target.ID, id) {
 			continue
 		}
 		score := 0
@@ -291,18 +311,30 @@ func (s *Store) Resolve(delta Delta, edges []Edge) error {
 		edge.Source, edge.Kind, edge.Weight = source.ID, "semantic", max(.1, min(1, edge.Weight))
 		valid = append(valid, edge)
 	}
+	slices.SortFunc(valid, func(a, b Edge) int {
+		return cmp.Or(cmp.Compare(b.Weight, a.Weight), cmp.Compare(a.Target, b.Target))
+	})
+	seen := make(map[string]bool)
+	valid = slices.DeleteFunc(valid, func(edge Edge) bool {
+		if seen[edge.Target] {
+			return true
+		}
+		seen[edge.Target] = true
+		return false
+	})
+	valid = valid[:min(semanticDegree, len(valid))]
 	next := s.state
 	next.Inferred = maps.Clone(next.Inferred)
 	next.Inferred[source.ID] = inference{Hash: source.Hash, Edges: valid}
-	return s.commit(next)
+	return s.commit(next, false)
 }
 
-func (s *Store) commit(next diskState) error {
+func (s *Store) commit(next diskState, sourcesChanged bool) error {
 	if err := storage.Save(s.path, &next); err != nil {
 		return err
 	}
 	s.state = next
-	s.rebuild()
+	s.rebuild(sourcesChanged)
 	close(s.change)
 	s.change = make(chan struct{})
 	return nil
@@ -318,72 +350,43 @@ func collectSections(docs map[string]parser.Document) map[string]parser.Section 
 	return out
 }
 
-func (s *Store) rebuild() {
-	s.sections = collectSections(s.state.Documents)
-	snap := Snapshot{
-		Revision: s.snapshot.Revision + 1, Nodes: []parser.Node{}, Edges: []Edge{},
-		Tasks: []parser.Task{}, Roadmaps: []parser.Roadmap{},
+func (s *Store) rebuild(sourcesChanged bool) {
+	snap := s.snapshot
+	if sourcesChanged {
+		s.sections = collectSections(s.state.Documents)
+		profiles := conceptProfiles(s.state.Documents)
+		snap.Nodes, snap.Tasks = []parser.Node{}, []parser.Task{}
+		labels := map[string][]parser.Section{}
+		for _, doc := range s.state.Documents {
+			snap.Tasks = append(snap.Tasks, doc.Tasks...)
+			for _, label := range doc.Labels {
+				labels[label.Value] = append(labels[label.Value], s.sections[label.Source])
+			}
+		}
+		roads, reviews := projectRoadmaps(s.state.Documents, profiles)
+		snap.Roadmaps = roads
+		snap.Tasks = append(snap.Tasks, reviews...)
+		refs, referenced := explicitEdges(s.state.Documents, labels)
+		s.explicit = refs
+		s.projected, snap.Files, snap.Headings = significantSections(s.state.Documents, referenced)
+		for _, section := range s.projected {
+			snap.Nodes = append(snap.Nodes, section.Node)
+		}
+		sortNodes(snap.Nodes)
+		sortNodes(snap.Files)
+		sortNodes(snap.Headings)
+		slices.SortFunc(snap.Tasks, func(a, b parser.Task) int { return cmp.Or(cmp.Compare(a.File, b.File), cmp.Compare(a.Line, b.Line)) })
+		s.local = conceptEdges(s.projected, profiles, s.sections)
 	}
-	labels := map[string][]parser.Section{}
-	for _, doc := range s.state.Documents {
-		snap.Tasks = append(snap.Tasks, doc.Tasks...)
-		if doc.Roadmap != nil {
-			snap.Roadmaps = append(snap.Roadmaps, *doc.Roadmap)
-		}
-		for _, label := range doc.Labels {
-			labels[label.Value] = append(labels[label.Value], s.sections[label.Source])
-		}
-	}
-	type edgeKey struct{ source, target, kind string }
-	edges := map[edgeKey]Edge{}
-	add := func(edge Edge) {
-		if _, exists := s.sections[edge.Target]; !exists || edge.Source == edge.Target {
-			return
-		}
-		key := edgeKey{edge.Source, edge.Target, edge.Kind}
-		if edge.Kind == "semantic" && key.source > key.target {
-			key.source, key.target = key.target, key.source
-		}
-		prior, exists := edges[key]
-		if !exists || prior.Weight < edge.Weight || (prior.Weight == edge.Weight && edge.Source < prior.Source) {
-			edges[key] = edge
-		}
-	}
-	for _, section := range s.sections {
-		snap.Nodes = append(snap.Nodes, section.Node)
+	snap.Revision++
+	snap.Pending = 0
+	for _, section := range s.projected {
 		if s.pending(section) {
 			snap.Pending++
 		}
-		if section.Parent != "" {
-			add(Edge{Source: section.Parent, Target: section.ID, Kind: "hierarchy", Weight: 1})
-		}
-		if inferred, ok := s.state.Inferred[section.ID]; ok && inferred.Hash == section.Hash {
-			for _, edge := range inferred.Edges {
-				add(edge)
-			}
-		}
 	}
-	for _, doc := range s.state.Documents {
-		for _, link := range doc.Links {
-			var target string
-			switch link.Kind {
-			case "ref", "eqref":
-				target = resolveLabel(doc.File, labels[link.Value])
-			case "input", "include":
-				target = resolveFile(doc.File, link.Value, s.state.Documents)
-			}
-			add(Edge{Source: link.Source, Target: target, Kind: link.Kind, Weight: 1, Reason: link.Value})
-		}
-	}
-	snap.Edges = slices.AppendSeq(snap.Edges, maps.Values(edges))
-	slices.SortFunc(snap.Nodes, func(a, b parser.Node) int {
-		return cmp.Or(cmp.Compare(a.File, b.File), cmp.Compare(a.Line, b.Line), cmp.Compare(a.ID, b.ID))
-	})
-	slices.SortFunc(snap.Tasks, func(a, b parser.Task) int { return cmp.Or(cmp.Compare(a.File, b.File), cmp.Compare(a.Line, b.Line)) })
-	slices.SortFunc(snap.Roadmaps, func(a, b parser.Roadmap) int { return cmp.Compare(a.File, b.File) })
-	slices.SortFunc(snap.Edges, func(a, b Edge) int {
-		return cmp.Or(cmp.Compare(a.Source, b.Source), cmp.Compare(a.Target, b.Target), cmp.Compare(a.Kind, b.Kind))
-	})
+	snap.Edges = projectEdges(s.sections, s.projected, s.explicit, s.local, s.state.Inferred)
+	snap.Groups, snap.OverviewEdges = groupGraph(snap.Nodes, s.projected, snap.Edges, s.explicit)
 	s.snapshot = snap
 }
 

@@ -74,7 +74,7 @@ func run(ctx context.Context, args []string) error {
 	case "index", "diagram":
 	case "todos":
 		flags.BoolVar(&summary, "summary", false, "riepilogo e suggerimenti dal provider configurato")
-		flags.StringVar(&kind, "kind", "", "tipo: TODO o VISUAL")
+		flags.StringVar(&kind, "kind", "", "tipo: TODO, VISUAL o MANUTENZIONE")
 		flags.StringVar(&section, "section", "", "filtra per titolo o ID della sezione")
 		flags.StringVar(&course, "course", "", "filtra per corso")
 	case "compile":
@@ -104,8 +104,8 @@ func run(ctx context.Context, args []string) error {
 		return errors.New("argomenti del comando non validi")
 	}
 	kind = strings.ToUpper(kind)
-	if kind != "" && kind != "TODO" && kind != "VISUAL" {
-		return errors.New("--kind deve essere TODO o VISUAL")
+	if kind != "" && kind != "TODO" && kind != "VISUAL" && kind != parser.MaintenanceTask {
+		return errors.New("--kind deve essere TODO, VISUAL o MANUTENZIONE")
 	}
 	if port < 0 || port > 65535 {
 		return errors.New("--port deve essere compresa tra 0 e 65535")

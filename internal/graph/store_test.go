@@ -19,11 +19,11 @@ func TestDeltaReopensOnlyEditedSection(t *testing.T) {
 	const name = "corso/appunti.tex"
 	original := `\section{Serie}
 \label{serie}
-Una serie converge.
+Una serie converge quando le somme parziali ammettono un limite finito.
 % TODO VISUAL: Disegnare le somme parziali.
 \subsection{Criterio}
 \eqref{serie}
-` + "Termine " + strings.Repeat("suffisso ", 50) + "FINE_INDICE_PRIVATO"
+` + "Termine " + strings.Repeat("suffisso ", 50) + "\n\\section{Confronto}\nIl criterio di confronto usa un limite. " + strings.Repeat("suffisso ", 50) + "FINE_INDICE_PRIVATO"
 	doc := parser.Parse(name, []byte(original))
 	if err := store.Apply(map[string]parser.Document{name: doc}, nil); err != nil {
 		t.Fatal(err)
@@ -53,7 +53,7 @@ Una serie converge.
 		t.Fatalf("sezioni già analizzate: %v", pending)
 	}
 
-	edited := parser.Parse(name, []byte(strings.Replace(original, "Una serie converge.", "Una serie converge o diverge.", 1)))
+	edited := parser.Parse(name, []byte(strings.Replace(original, "Una serie converge quando le somme parziali ammettono un limite finito.", "Una serie converge oppure diverge con una caratterizzazione del limite.", 1)))
 	if err := store.Apply(map[string]parser.Document{name: edited}, nil); err != nil {
 		t.Fatal(err)
 	}

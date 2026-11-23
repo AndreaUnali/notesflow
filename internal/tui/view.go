@@ -116,6 +116,9 @@ func (m Model) View() string {
 			main = m.graphRows(width, height)
 		case todoTab:
 			title = "TODO del corso"
+			if m.taskKind != "" {
+				title = "TODO · " + m.taskKind
+			}
 			if m.showSummary {
 				title = "Riepilogo TODO"
 				main = m.summaryRows()
@@ -136,7 +139,7 @@ func (m Model) View() string {
 		if !l.split {
 			rightWidth = l.left
 		}
-		top := panel(fmt.Sprintf("TODO · %d", len(m.tasks(false))), m.sidebarRows(rightWidth-2, l.todo-2), rightWidth, l.todo, false)
+		top := panel(fmt.Sprintf("TODO · %d", len(m.sidebarItems())), m.sidebarRows(rightWidth-2, l.todo-2), rightWidth, l.todo, m.focus == sidebarFocus)
 		preview := panel("Anteprima PDF", m.pdfRows(), rightWidth, l.pdf, m.focus == pdfFocus)
 		aside := append(top, preview...)
 		if l.split {
@@ -208,10 +211,10 @@ func (m Model) header(l layout) []string {
 		}
 		lines[tab.hit.y] += style.Render("  "+tab.label+"  ") + " "
 	}
-	first, second := " r Roadmap   R Mostra/nascondi   p PDF", " b Compila   c Corso   q Esci"
+	first, second := " r Roadmap   R Mostra/nascondi   p PDF   t TODO", " b Compila   c Corso   q Esci"
 	if m.commandMode {
 		first = " ←/→ schede · Invio apri · Tab torna"
-		second = " r/R Roadmap · p PDF · b Compila · c Corso · q Esci"
+		second = " r/R Roadmap · p PDF · t TODO · b Compila · c Corso · q Esci"
 	} else if m.tab == editorTab || m.focus != mainFocus {
 		first = " Shift+Tab · Focus sulle schede"
 		second = ""
@@ -245,57 +248,6 @@ func editorMode(mode string) string {
 	default:
 		return strings.ToUpper(mode)
 	}
-}
-
-type sidebarEntry struct {
-	label string
-	task  int
-}
-
-func (m Model) sidebarTasks(width, height int) []sidebarEntry {
-	if width < 5 || height <= 0 {
-		return nil
-	}
-	tasks := m.tasks(false)
-	if len(tasks) == 0 {
-		return []sidebarEntry{{muted.Render(" Nessun TODO nel corso"), -1}}
-	}
-	var rows []sidebarEntry
-	for i, task := range tasks {
-		first := accent.Render(" ◇ ")
-		if task.Kind == "VISUAL" {
-			first = pink.Render(" ◆ ")
-		}
-		lines := strings.Split(ansi.Wrap(clean(task.Text), width-3, " "), "\n")
-		if len(lines) > 2 {
-			lines = lines[:2]
-			lines[1] = ansi.Truncate(lines[1]+"…", width-3, "…")
-		}
-		if len(rows)+len(lines) > height {
-			if len(rows) == height {
-				rows = rows[:height-1]
-			}
-			rows = append(rows, sidebarEntry{muted.Render(" 4 · Vedi tutti i TODO"), -1})
-			break
-		}
-		for j, text := range lines {
-			prefix := "   "
-			if j == 0 {
-				prefix = first
-			}
-			rows = append(rows, sidebarEntry{prefix + strings.TrimSpace(text), i})
-		}
-	}
-	return rows
-}
-
-func (m Model) sidebarRows(width, height int) []string {
-	entries := m.sidebarTasks(width, height)
-	rows := make([]string, len(entries))
-	for i, e := range entries {
-		rows[i] = e.label
-	}
-	return rows
 }
 
 func (m Model) listRows(height int) []string {
@@ -347,13 +299,22 @@ func (m Model) summaryRows() []string {
 func (m Model) help() string {
 	switch {
 	case m.focus == roadFocus:
+		items := m.milestones()
+		if len(items) > 0 {
+			item := items[min(m.roadCursor, len(items)-1)]
+			if source := item.Evidence; source != nil {
+				return fmt.Sprintf(" ←/→ Tappe · Invio Roadmap · e Appunti · %s:%d", clean(source.File), source.Line)
+			}
+		}
 		return " ←/→ Tappe · Invio Apri la fonte · Esc Torna"
+	case m.focus == sidebarFocus:
+		return " ←/→ Filtri TODO · Invio Apri la lista · Esc Torna"
 	case m.focus == pdfFocus:
 		return " ←/→ pagina · ↑/↓ scorri testo · t testo/pagina · Esc torna"
 	case m.tab == editorTab:
 		return " :w Salva   Shift+Tab naviga   Shift+Tab poi b compila"
 	case m.tab == graphTab:
-		return " / Cerca · +/− Zoom · f Filtra · ↑↓ Nodi · Invio apri · doppio clic apri"
+		return " / Cerca · ↑↓ Nodi · Invio entra/apri · Esc torna · Pg↑/Pg↓ pagina · f Filtra · +/− zoom"
 	case m.tab == todoTab:
 		return " ↑↓ Scorri · f Tipo · s Riepilogo · v Lista · Invio Apri"
 	default:
@@ -397,18 +358,24 @@ func (m Model) milestones() []milestone {
 
 func (m Model) roadRows(height int) []string {
 	items := m.milestones()
-	done, total := 0, 0
+	done, total, reviews := 0, 0, 0
 	for _, item := range items {
 		if item.Done != nil {
 			total++
 			if *item.Done {
 				done++
 			}
+			if item.Evidence != nil && item.Evidence.Review != "" {
+				reviews++
+			}
 		}
 	}
 	progress := fmt.Sprintf("%d tappe", len(items))
 	if total > 0 {
 		progress = fmt.Sprintf("%d/%d completate", done, total)
+	}
+	if reviews > 0 {
+		progress += fmt.Sprintf(" · %d da verificare", reviews)
 	}
 	keys := "r seleziona · R comprimi"
 	prefix := ""
@@ -450,8 +417,14 @@ func (m Model) roadRows(height int) []string {
 		if item.Done != nil && *item.Done {
 			style, mark = accent.Bold(false), "✓ "
 		}
+		if item.Evidence != nil && item.Evidence.Review != "" {
+			style, mark = graphColors[3], "! "
+		}
 		if i == cursor && m.focus == roadFocus {
-			style, mark = pink, "› "
+			style = pink
+			if mark != "! " {
+				mark = "› "
+			}
 		}
 		dashes := strings.Repeat("─", boxWidth-2)
 		blocks[0].WriteString(style.Render("╭" + dashes + "╮"))

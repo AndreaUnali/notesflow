@@ -135,7 +135,7 @@ func read(ctx context.Context, absolute, file, previous string, size int64) (par
 	if err != nil {
 		return parser.Document{}, false, err
 	}
-	if parser.Digest(data) == previous {
+	if parser.SourceDigest(data) == previous {
 		return parser.Document{}, false, nil
 	}
 	return parser.Parse(file, data), true, nil

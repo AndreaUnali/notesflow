@@ -22,9 +22,13 @@ type Node struct {
 
 type Section struct {
 	Node
-	Parent string
-	Hash   string
-	Text   string
+	Parent        string
+	Hash          string
+	Text          string
+	Level         int
+	ContentLine   int
+	ContentWords  int
+	OpenChecklist bool
 }
 
 type Link struct {
@@ -42,11 +46,29 @@ type Task struct {
 	Text    string `json:"text"`
 }
 
+const MaintenanceTask = "MANUTENZIONE"
+
+type Completion struct {
+	Text string
+	Line int
+}
+
+type RoadmapEvidence struct {
+	File   string `json:"file"`
+	Line   int    `json:"line"`
+	Kind   string `json:"kind"`
+	Review string `json:"review,omitempty"`
+}
+
 type Milestone struct {
-	Title string `json:"title"`
-	Line  int    `json:"line"`
-	Depth int    `json:"depth"`
-	Done  *bool  `json:"done,omitempty"`
+	Heading     bool             `json:"heading,omitempty"`
+	Title       string           `json:"title"`
+	Line        int              `json:"line"`
+	Depth       int              `json:"depth"`
+	Done        *bool            `json:"done,omitempty"`
+	Check       string           `json:"check,omitempty"`
+	KeepPending bool             `json:"keep_pending,omitempty"`
+	Evidence    *RoadmapEvidence `json:"evidence,omitempty"`
 }
 
 type Roadmap struct {
@@ -69,13 +91,14 @@ func (r Roadmap) Progress() (done, total int) {
 }
 
 type Document struct {
-	File     string
-	Hash     string
-	Sections []Section
-	Labels   []Link
-	Links    []Link
-	Tasks    []Task
-	Roadmap  *Roadmap
+	File        string
+	Hash        string
+	Sections    []Section
+	Labels      []Link
+	Links       []Link
+	Tasks       []Task
+	Completions []Completion
+	Roadmap     *Roadmap
 }
 
 var (
@@ -107,7 +130,7 @@ func IsRoadmap(file string) bool {
 }
 
 func Parse(file string, data []byte) Document {
-	doc := Document{File: file, Hash: Digest(data)}
+	doc := Document{File: file, Hash: SourceDigest(data)}
 	title := strings.TrimSuffix(path.Base(file), path.Ext(file))
 	doc.Sections = []Section{{Node: Node{ID: file, Title: title, Kind: "file", File: file, Course: Course(file), Line: 1}}}
 	if IsRoadmap(file) {
@@ -144,7 +167,7 @@ func Parse(file string, data []byte) Document {
 		}
 		doc.Sections = append(doc.Sections, Section{Node: Node{
 			ID: id, Title: title, Kind: "section", File: file, Course: Course(file), Line: line,
-		}, Parent: parent})
+		}, Parent: parent, Level: level})
 		current = len(doc.Sections) - 1
 		stack = append(stack, current)
 		depth = append(depth, level)
@@ -184,6 +207,12 @@ func Parse(file string, data []byte) Document {
 					doc.Links = append(doc.Links, link)
 				}
 			}
+			if doc.Roadmap == nil {
+				if done := completedTeX.FindStringSubmatch(comment); done != nil {
+					doc.Completions = append(doc.Completions, Completion{Text: done[1], Line: number})
+				}
+				doc.Sections[current].addContent(code, number)
+			}
 			if task := taskRE.FindStringSubmatch(comment); task != nil {
 				section := doc.Sections[current]
 				kind := "TODO"
@@ -208,6 +237,14 @@ func Parse(file string, data []byte) Document {
 				}
 				if doc.Roadmap != nil {
 					addMilestone(doc.Roadmap, line, number)
+				} else if task := checkboxRE.FindStringSubmatch(line); task != nil {
+					if task[2] != " " {
+						doc.Completions = append(doc.Completions, Completion{Text: task[3], Line: number})
+					} else {
+						doc.Sections[current].OpenChecklist = true
+					}
+				} else if !headingRE.MatchString(line) {
+					doc.Sections[current].addContent(trimmed, number)
 				}
 			}
 		}
@@ -221,11 +258,13 @@ func addMilestone(roadmap *Roadmap, line string, number int) {
 	switch {
 	case headingRE.MatchString(line):
 		match := headingRE.FindStringSubmatch(line)
-		roadmap.Items = append(roadmap.Items, Milestone{Title: match[2], Line: number, Depth: len(match[1]) - 1})
+		roadmap.Items = append(roadmap.Items, Milestone{Title: match[2], Heading: true, Line: number, Depth: len(match[1]) - 1})
 	case checkboxRE.MatchString(line):
 		match := checkboxRE.FindStringSubmatch(line)
 		done := match[2] != " "
-		roadmap.Items = append(roadmap.Items, Milestone{Title: match[3], Line: number, Depth: 1 + len(match[1])/2, Done: &done})
+		milestone := Milestone{Title: match[3], Line: number, Depth: 1 + len(match[1])/2, Done: &done}
+		milestone.parseCheck()
+		roadmap.Items = append(roadmap.Items, milestone)
 	case bulletRE.MatchString(line):
 		match := bulletRE.FindStringSubmatch(line)
 		roadmap.Items = append(roadmap.Items, Milestone{Title: match[2], Line: number, Depth: 1 + len(match[1])/2})

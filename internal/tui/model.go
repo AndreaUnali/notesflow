@@ -36,6 +36,7 @@ const (
 	mainFocus = iota
 	roadFocus
 	pdfFocus
+	sidebarFocus
 )
 
 const rootCourse = "."
@@ -68,6 +69,7 @@ type Model struct {
 	transition         transition
 
 	taskKind, summary        string
+	sidebarTab               int
 	summarizing, showSummary bool
 	summaryOffset            int
 
@@ -85,6 +87,7 @@ type Model struct {
 
 	canvas           terminalGraph
 	graphSearch      bool
+	graphGroup       string
 	query            string
 	edgeFilter       int
 	zoom             float64
@@ -332,6 +335,15 @@ func (m Model) key(key tea.KeyMsg) (Model, tea.Cmd) {
 		delta := 1
 		if s == "pgdown" || s == "pgup" {
 			delta = max(1, m.layout().body-3)
+			if m.tab == graphTab {
+				if s == "pgup" {
+					m.stepGraphPage(-1)
+				} else {
+					m.stepGraphPage(1)
+				}
+				m.prepareGraph()
+				return m, nil
+			}
 		}
 		if s == "up" || s == "k" || s == "pgup" {
 			delta = -delta
@@ -351,8 +363,9 @@ func (m Model) key(key tea.KeyMsg) (Model, tea.Cmd) {
 			m.message = []string{"Tutti gli archi", "Collegamenti LaTeX", "Collegamenti semantici", "Gerarchia"}[m.edgeFilter]
 		}
 		if m.tab == todoTab {
-			next := map[string]string{"": "TODO", "TODO": "VISUAL", "VISUAL": ""}
-			m.taskKind, m.cursor, m.showSummary = next[m.taskKind], 0, false
+			current := slices.IndexFunc(todoTabs[:], func(tab todoTabSpec) bool { return tab.kind == m.taskKind })
+			next := todoTabs[(current+1)%len(todoTabs)]
+			m.taskKind, m.cursor, m.showSummary = next.kind, 0, false
 		}
 	case "s":
 		if m.tab == todoTab && !m.summarizing {
@@ -367,11 +380,11 @@ func (m Model) key(key tea.KeyMsg) (Model, tea.Cmd) {
 		if m.tab == todoTab {
 			m.showSummary = !m.showSummary
 		}
-	case "esc", "+", "=", "-", "0", "left", "right":
+	case "esc", "backspace", "+", "=", "-", "0", "left", "right":
 		if m.tab == graphTab {
 			switch s {
-			case "esc":
-				m.query, m.cursor = "", 0
+			case "esc", "backspace":
+				m.backGraph()
 			case "+", "=":
 				m.zoom = min(4, m.zoom*1.2)
 			case "-":
@@ -429,6 +442,12 @@ func (m *Model) command(key string) (tea.Cmd, bool) {
 		}
 		m.resizeEditor()
 		return m.probePDF(), true
+	case "t":
+		if m.tab == editorTab || m.layout().todo < 3 {
+			return m.openSidebarList(), true
+		}
+		m.focus = sidebarFocus
+		return nil, true
 	case "p":
 		if m.focus == pdfFocus {
 			m.focus = mainFocus
@@ -480,6 +499,19 @@ func (m *Model) sideKey(s string) tea.Cmd {
 		m.focus = mainFocus
 		return nil
 	}
+	if m.focus == sidebarFocus {
+		switch s {
+		case "left", "h":
+			m.sidebarTab = (m.sidebarTab + len(todoTabs) - 1) % len(todoTabs)
+		case "right", "l":
+			m.sidebarTab = (m.sidebarTab + 1) % len(todoTabs)
+		case "enter":
+			return m.openSidebarList()
+		case "tab", "t":
+			m.focus = mainFocus
+		}
+		return nil
+	}
 	if m.focus == pdfFocus {
 		page := m.pdfPage
 		switch s {
@@ -514,6 +546,12 @@ func (m *Model) sideKey(s string) tea.Cmd {
 		m.roadCursor = max(0, m.roadCursor-1)
 	case "right", "down", "l", "j":
 		m.roadCursor = max(0, min(len(items)-1, m.roadCursor+1))
+	case "e":
+		if len(items) > 0 {
+			if evidence := items[min(m.roadCursor, len(items)-1)].Evidence; evidence != nil {
+				return m.openEditor(source{evidence.File, evidence.Line}, false)
+			}
+		}
 	case "enter":
 		if len(items) > 0 {
 			item := items[min(m.roadCursor, len(items)-1)]
@@ -526,6 +564,12 @@ func (m *Model) sideKey(s string) tea.Cmd {
 }
 
 func (m *Model) activate() tea.Cmd {
+	if m.tab == graphTab {
+		if node, ok := m.graphNode(); ok {
+			return m.enterGraph(node.ID)
+		}
+		return nil
+	}
 	if m.tab == homeTab && m.cursor < len(homeActions) {
 		switch m.cursor {
 		case 0:
@@ -632,7 +676,7 @@ func (m Model) isCourseRoot() bool {
 			return true
 		}
 	}
-	for _, node := range m.snapshot.Nodes {
+	for _, node := range m.snapshot.Files {
 		if node.Kind == "file" && !strings.Contains(node.File, "/") &&
 			(strings.EqualFold(node.File, "main.tex") || strings.Contains(node.Summary, "\\documentclass")) {
 			return true
@@ -643,7 +687,7 @@ func (m Model) isCourseRoot() bool {
 
 func (m *Model) nextCourse() {
 	set := map[string]bool{}
-	for _, node := range m.snapshot.Nodes {
+	for _, node := range m.snapshot.Files {
 		if node.Course != "Workspace" {
 			set[node.Course] = true
 		}
@@ -666,6 +710,7 @@ func (m *Model) nextCourse() {
 	m.course = courses[(slices.Index(courses, m.course)+1)%len(courses)]
 	m.cursor, m.roadCursor, m.pdfPage, m.pdfOffset, m.showSummary = 0, 0, 1, 0, false
 	m.tab, m.focus = homeTab, mainFocus
+	m.graphGroup, m.query, m.graphSearch = "", "", false
 }
 
 func (m Model) scopeDir() string {
@@ -709,7 +754,7 @@ var homeActions = []string{
 
 func (m Model) files() []source {
 	var files []source
-	for _, node := range m.snapshot.Nodes {
+	for _, node := range m.snapshot.Files {
 		if node.Kind == "file" && m.fileInScope(node.File) {
 			files = append(files, source{node.File, node.Line})
 		}

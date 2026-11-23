@@ -89,3 +89,33 @@ func TestShiftTabFocusesNavigationWithoutChangingEditorTab(t *testing.T) {
 		t.Fatal("Enter should open the highlighted Home tab")
 	}
 }
+
+func TestSidebarTabsFilterIndependentlyAndAreClickable(t *testing.T) {
+	model := Model{width: 132, height: 42, todoFraction: 1, snapshot: graph.Snapshot{
+		Tasks: []parser.Task{
+			{File: "classico.tex", Kind: "TODO", Text: "Un esercizio"},
+			{File: "schema.tex", Kind: "VISUAL", Text: "Un grafico"},
+			{File: "roadmap.md", Kind: parser.MaintenanceTask, Text: "Verifica una decisione"},
+		},
+	}}
+	if len(model.sidebarItems()) != 3 {
+		t.Fatal("Tutti should be the initial tab")
+	}
+	model.command("t")
+	model.sideKey("right")
+	if entries := model.sidebarItems(); len(entries) != 1 || entries[0].Kind != "TODO" || model.taskKind != "" {
+		t.Fatalf("unexpected sidebar or full TODO filter: %v, %q", entries, model.taskKind)
+	}
+	l := model.layout()
+	for i, want := range []string{"", "TODO", "VISUAL", parser.MaintenanceTask} {
+		button := sidebarTabs(l.right - 2)[i]
+		model.mouse(tea.MouseEvent{X: l.left + 1 + button.start, Y: l.header + 1, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+		if model.sidebarTab != i || todoTabs[model.sidebarTab].kind != want {
+			t.Fatalf("click did not select tab %d", i)
+		}
+	}
+	model.sideKey("enter")
+	if model.tab != todoTab || model.taskKind != parser.MaintenanceTask {
+		t.Fatal("Enter should open the corresponding full TODO list")
+	}
+}

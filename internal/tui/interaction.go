@@ -102,14 +102,25 @@ func (m *Model) mouse(event tea.MouseEvent) tea.Cmd {
 			side = cellRect{0, l.header + l.body, l.left, l.todo}
 		}
 		if side.contains(event.X, event.Y) {
-			i := event.Y - side.y - 1
-			tasks := m.tasks(false)
-			rows := m.sidebarTasks(side.cols-2, l.todo-2)
-			if i >= 0 && i < len(rows) && rows[i].task >= 0 {
-				task := tasks[rows[i].task]
+			row, col := event.Y-side.y-1, event.X-side.x-1
+			if row <= 0 {
+				m.focus = sidebarFocus
+				if row == 0 {
+					for _, button := range sidebarTabs(side.cols - 2) {
+						if col >= button.start && col < button.end {
+							m.sidebarTab = button.tab
+							break
+						}
+					}
+				}
+				return nil
+			}
+			rows := m.sidebarTasks(side.cols-2, l.todo-3)
+			if i := row - 1; i < len(rows) && rows[i].task >= 0 {
+				task := m.sidebarItems()[rows[i].task]
 				return m.openEditor(source{task.File, task.Line}, false)
 			}
-			return m.setTab(todoTab)
+			return m.openSidebarList()
 		}
 	}
 	if main.contains(event.X, event.Y) && m.tab != editorTab && m.tab != graphTab && !(m.tab == todoTab && m.showSummary) {
@@ -166,8 +177,7 @@ func (m *Model) graphMouse(event tea.MouseEvent, click bool) tea.Cmd {
 		m.cursor = i
 		m.prepareGraph()
 		if d.clicked == d.node && time.Since(d.clickedAt) < 350*time.Millisecond {
-			n := nodes[i]
-			return m.openEditor(source{n.File, n.Line}, false)
+			return m.enterGraph(nodes[i].ID)
 		}
 		d.clicked, d.clickedAt = d.node, time.Now()
 	}

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/AndreaUnali/notesflow/internal/graph"
@@ -20,23 +21,101 @@ type graphBounds struct{ left, right, top, bottom float64 }
 type terminalGraph struct {
 	revision  uint64
 	scope     string
-	center    string
 	nodes     []parser.Node
 	edges     []graph.Edge
 	positions map[string]point
+	family    map[string]string
+	overview  bool
 	bounds    graphBounds
 }
 
 func (m Model) graphNodes() []parser.Node {
 	var nodes []parser.Node
 	query := strings.ToLower(strings.TrimSpace(m.query))
+	if query != "" {
+		seen := make(map[string]bool)
+		for _, list := range [][]parser.Node{m.snapshot.Nodes, m.snapshot.Headings} {
+			for _, node := range list {
+				if !seen[node.ID] && m.fileInScope(node.File) &&
+					strings.Contains(strings.ToLower(node.Title+" "+node.File), query) {
+					nodes = append(nodes, node)
+					seen[node.ID] = true
+				}
+			}
+		}
+		return nodes
+	}
+	if m.graphGroup != "" {
+		group, ok := m.selectedGroup(m.graphGroup)
+		if ok {
+			members := make(map[string]bool, len(group.Members))
+			for _, id := range group.Members {
+				members[id] = true
+			}
+			for _, node := range m.snapshot.Nodes {
+				if members[node.ID] {
+					nodes = append(nodes, node)
+				}
+			}
+			return nodes
+		}
+	}
+	index := make(map[string]parser.Node, len(m.snapshot.Nodes))
 	for _, node := range m.snapshot.Nodes {
-		if m.fileInScope(node.File) &&
-			strings.Contains(strings.ToLower(node.Title+" "+node.Course+" "+node.File), query) {
-			nodes = append(nodes, node)
+		index[node.ID] = node
+	}
+	for _, group := range m.snapshot.Groups {
+		if !m.fileInScope(group.File) {
+			continue
+		}
+		nodes = append(nodes, group.Node)
+		for _, id := range group.Topics {
+			if node, ok := index[id]; ok {
+				nodes = append(nodes, node)
+			}
 		}
 	}
 	return nodes
+}
+
+func (m Model) selectedGroup(id string) (graph.Group, bool) {
+	for _, group := range m.snapshot.Groups {
+		if group.ID == id && m.fileInScope(group.File) {
+			return group, true
+		}
+	}
+	return graph.Group{}, false
+}
+
+func (m Model) graphEdges() []graph.Edge {
+	if m.query == "" && m.graphGroup == "" {
+		return m.snapshot.OverviewEdges
+	}
+	return m.snapshot.Edges
+}
+
+func (m *Model) enterGraph(id string) tea.Cmd {
+	if group, ok := m.selectedGroup(id); ok {
+		m.graphGroup, m.query, m.graphSearch, m.cursor = group.ID, "", false, 0
+		m.graphHover, m.pan, m.zoom = "", point{}, 1
+		m.prepareGraph()
+		return nil
+	}
+	if node, ok := m.graphNode(); ok {
+		return m.openEditor(source{node.File, node.Line}, false)
+	}
+	return nil
+}
+
+func (m *Model) backGraph() {
+	if m.query != "" || m.graphSearch {
+		m.query, m.graphSearch, m.cursor = "", false, 0
+	} else if m.graphGroup != "" {
+		group := m.graphGroup
+		m.graphGroup = ""
+		m.cursor = max(0, slices.IndexFunc(m.graphNodes(), func(n parser.Node) bool { return n.ID == group }))
+	}
+	m.graphHover, m.pan, m.zoom = "", point{}, 1
 }
 
 func (m Model) graphNode() (parser.Node, bool) {
@@ -47,64 +126,80 @@ func (m Model) graphNode() (parser.Node, bool) {
 	return nodes[min(m.cursor, len(nodes)-1)], true
 }
 
-func (m *Model) prepareGraph() {
-	selection, ok := m.graphNode()
-	if !ok {
-		return
+// Keep the chapter and its highlighted topics together when changing pages.
+func (m Model) graphPage(nodes []parser.Node, index int) (int, int) {
+	if m.query != "" || m.graphGroup != "" {
+		from := index / graph.GraphPageSize * graph.GraphPageSize
+		return from, min(len(nodes), from+graph.GraphPageSize)
 	}
-	visible := m.graphNodes()
-	center := ""
-	if len(visible) > 70 {
-		center = selection.ID
+	from, groups := 0, 0
+	for i, node := range nodes {
+		if node.Kind != "group" {
+			continue
+		}
+		if groups > 0 && groups%graph.MapChaptersPerPage == 0 {
+			if index < i {
+				return from, i
+			}
+			from = i
+		}
+		groups++
 	}
-	scope := m.course + "\n" + m.query
-	if m.canvas.revision == m.snapshot.Revision && m.canvas.scope == scope && m.canvas.center == center {
-		return
-	}
-	m.canvas = layoutGraph(m.snapshot, visible, scope, center, selection.ID)
+	return from, len(nodes)
 }
 
-func layoutGraph(snapshot graph.Snapshot, visible []parser.Node, scope, center, selection string) terminalGraph {
-	if len(visible) > 70 {
-		neighbors := map[string]bool{selection: true}
-		for _, edge := range snapshot.Edges {
-			if edge.Source == selection {
-				neighbors[edge.Target] = true
-			} else if edge.Target == selection {
-				neighbors[edge.Source] = true
-			}
-		}
-		visible = slices.Clone(visible)
-		slices.SortStableFunc(visible, func(a, b parser.Node) int {
-			switch {
-			case a.ID == selection:
-				return -1
-			case b.ID == selection:
-				return 1
-			case neighbors[a.ID] != neighbors[b.ID]:
-				if neighbors[a.ID] {
-					return -1
-				}
-				return 1
-			default:
-				return 0
-			}
-		})
-		visible = visible[:70]
+func (m *Model) stepGraphPage(direction int) {
+	nodes := m.graphNodes()
+	if len(nodes) == 0 {
+		return
 	}
-	g := terminalGraph{revision: snapshot.Revision, scope: scope, center: center, nodes: visible, positions: make(map[string]point)}
+	from, to := m.graphPage(nodes, min(m.cursor, len(nodes)-1))
+	if direction > 0 && to < len(nodes) {
+		m.cursor = to
+	} else if direction < 0 && from > 0 {
+		m.cursor, _ = m.graphPage(nodes, from-1)
+	}
+}
+
+func (m *Model) prepareGraph() {
+	if m.graphGroup != "" {
+		if _, ok := m.selectedGroup(m.graphGroup); !ok {
+			m.graphGroup, m.cursor = "", 0
+		}
+	}
+	nodes := m.graphNodes()
+	if len(nodes) == 0 {
+		return
+	}
+	start, end := m.graphPage(nodes, min(m.cursor, len(nodes)-1))
+	scope := fmt.Sprintf("%s\n%s\n%s\n%d", m.course, m.graphGroup, m.query, start)
+	if m.canvas.revision == m.snapshot.Revision && m.canvas.scope == scope {
+		return
+	}
+	m.canvas = layoutGraph(m.snapshot.Revision, m.graphEdges(), nodes[start:end], scope)
+}
+
+func layoutGraph(revision uint64, edges []graph.Edge, visible []parser.Node, scope string) terminalGraph {
+	g := terminalGraph{revision: revision, scope: scope, nodes: visible, positions: make(map[string]point), family: make(map[string]string)}
 	index := make(map[string]int)
 	pos := make([]point, len(visible))
 	for i, node := range visible {
 		index[node.ID] = i
+		if node.Kind == "group" {
+			g.family[node.ID] = node.ID
+			g.overview = true
+		}
 		angle := float64(i) * 2.399963
 		spread := .45 * math.Sqrt(float64(i)+1)
 		pos[i] = point{math.Cos(angle) * spread, math.Sin(angle) * spread}
 	}
-	for _, edge := range snapshot.Edges {
+	for _, edge := range edges {
 		_, a := index[edge.Source]
 		_, b := index[edge.Target]
 		if a && b {
+			if g.family[edge.Source] == edge.Source && edge.Kind == "hierarchy" {
+				g.family[edge.Target] = edge.Source
+			}
 			g.edges = append(g.edges, edge)
 		}
 	}
@@ -127,7 +222,7 @@ func layoutGraph(snapshot graph.Snapshot, visible []parser.Node, scope, center, 
 			dist := max(.02, math.Hypot(dx, dy))
 			strength := (dist - .75) * .18
 			if edge.Kind == "semantic" {
-				strength *= .35
+				continue
 			}
 			forces[a].x += dx / dist * strength
 			forces[a].y += dy / dist * strength
@@ -157,18 +252,34 @@ var graphColors = []lipgloss.Style{accent, pink,
 
 func (m Model) graphRows(width, height int) []string {
 	node, ok := m.graphNode()
-	heading := " ● LaTeX   ··· Semantico   ─ Gerarchia"
+	nodes := m.graphNodes()
+	total := len(nodes)
+	first, last := m.graphPage(nodes, min(m.cursor, max(0, total-1)))
+	var chapters int
+	for _, node := range nodes[first:last] {
+		if node.Kind == "group" {
+			chapters++
+		}
+	}
+	heading := fmt.Sprintf(" Panoramica · %d capitoli · %d concetti", chapters, last-first-chapters)
+	if group, found := m.selectedGroup(m.graphGroup); found {
+		heading = fmt.Sprintf(" %s · %d nodi", clean(group.Title), total)
+	}
 	if m.graphSearch || m.query != "" {
 		heading = " / " + clean(m.query)
 		if m.graphSearch {
 			heading += "▏"
 		}
+		heading += fmt.Sprintf(" · %d risultati", total)
+	}
+	if last-first < total {
+		heading += fmt.Sprintf(" · %d–%d di %d", first+1, last, total)
 	}
 	if !ok {
 		return []string{heading, " Nessun nodo corrispondente"}
 	}
 	var latex, semantic, hierarchy int
-	for _, edge := range m.snapshot.Edges {
+	for _, edge := range m.graphEdges() {
 		if edge.Source != node.ID && edge.Target != node.ID {
 			continue
 		}
@@ -186,6 +297,9 @@ func (m Model) graphRows(width, height int) []string {
 		muted.Render(fmt.Sprintf("%s:%d · %d LaTeX / %d sem. / %d ger.", clean(node.File), node.Line, latex, semantic, hierarchy)),
 	}
 
+	if node.Kind == "group" {
+		details[1] = muted.Render(fmt.Sprintf("%s:%d · Invio entra nel capitolo", clean(node.File), node.Line))
+	}
 	details = append(details, muted.Render(clean(node.Summary)))
 	if m.graphSurface.graphic != nil && height >= 6 {
 		rows := make([]string, 1, height)
@@ -194,7 +308,23 @@ func (m Model) graphRows(width, height int) []string {
 		return append(rows, details...)
 	}
 	rows := []string{heading, ""}
-	for _, edge := range m.snapshot.Edges {
+	if m.canvas.overview {
+		for _, visible := range m.canvas.nodes {
+			if len(rows) >= height-3 {
+				break
+			}
+			mark := "  "
+			if visible.ID == node.ID {
+				mark = "› "
+			}
+			if visible.Kind != "group" {
+				mark += "  "
+			}
+			rows = append(rows, mark+clean(visible.Title))
+		}
+		return append(rows, details...)
+	}
+	for _, edge := range m.graphEdges() {
 		neighbor := edge.Source
 		if neighbor == node.ID {
 			neighbor = edge.Target

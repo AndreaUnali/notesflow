@@ -150,6 +150,13 @@ func renderGraph(g terminalGraph, key graphRenderKey) renderedGraph {
 	neighbors := make(map[string]bool)
 	for _, edge := range g.edges {
 		kind := edgeKind(edge.Kind)
+		related := focus
+		if related == "" {
+			related = key.selected
+		}
+		if kind == 2 && !g.overview && edge.Source != related && edge.Target != related {
+			continue
+		}
 		if key.filter != 0 && key.filter != kind {
 			continue
 		}
@@ -175,10 +182,17 @@ func renderGraph(g terminalGraph, key graphRenderKey) renderedGraph {
 		line(img, a, b, shade, stroke, strength, dashed)
 	}
 	order := slices.Clone(g.nodes)
-	courses := map[string]int{}
-	for _, node := range order {
-		if _, exists := courses[node.Course]; !exists {
-			courses[node.Course] = len(courses)
+	colors := map[string]int{}
+	groupFor := func(node parser.Node) string {
+		if family := g.family[node.ID]; family != "" {
+			return family
+		}
+		return node.Course
+	}
+	for _, node := range g.nodes {
+		key := groupFor(node)
+		if _, exists := colors[key]; !exists {
+			colors[key] = len(colors)
 		}
 	}
 	slices.SortStableFunc(order, func(a, b parser.Node) int {
@@ -220,10 +234,10 @@ func renderGraph(g terminalGraph, key graphRenderKey) renderedGraph {
 		if p.x < 0 || p.y < 0 || p.x > float64(w) || p.y > float64(h) {
 			continue
 		}
-		c := courseRGB[courses[node.Course]%len(courseRGB)]
+		c := courseRGB[colors[groupFor(node)]%len(courseRGB)]
 		active := focus == "" || node.ID == focus || neighbors[node.ID]
 		r := 4.2
-		if node.Kind == "file" {
+		if node.Kind == "file" || node.Kind == "group" {
 			r = 6.2
 		}
 		if node.ID == key.selected || node.ID == focus {

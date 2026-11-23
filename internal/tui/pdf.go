@@ -48,7 +48,7 @@ func (m Model) mainTeX() string {
 	}
 	var best string
 	bestRank := 0
-	for _, node := range m.snapshot.Nodes {
+	for _, node := range m.snapshot.Files {
 		if node.Kind != "file" || !m.fileInScope(node.File) || !strings.EqualFold(filepath.Ext(node.File), ".tex") {
 			continue
 		}

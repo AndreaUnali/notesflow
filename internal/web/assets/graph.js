@@ -20,6 +20,12 @@ let density = 1;
 let heat = 1;
 let firstSnapshot = true;
 let revision = 0;
+const graphPageSize = 14;
+const mapChaptersPerPage = 3;
+let catalog = null;
+let chapterId = null;
+let graphPage = 0;
+let searchNode = null;
 const courseColors = new Map();
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
@@ -51,12 +57,45 @@ function refreshFilters() {
 function ingest(snapshot) {
   if (snapshot.revision === revision) return;
   revision = snapshot.revision;
+  catalog = snapshot;
+  if (chapterId && !catalog.groups.some(group => group.id === chapterId)) {
+    chapterId = null;
+    graphPage = 0;
+  }
+  if (searchNode) searchNode = catalog.headings.find(node => node.id === searchNode.id) || null;
+  showScope();
+}
+
+function showScope(reset = false) {
+  if (!catalog) return;
+  const chapter = catalog.groups.find(group => group.id === chapterId);
+  const members = new Set(chapter?.members || []);
+  const overview = !chapter && !searchNode;
+  let all = overview ? catalog.groups : catalog.nodes.filter(node => members.has(node.id));
+  if (searchNode && !members.has(searchNode.id)) all = [searchNode, ...all];
+  const limit = overview ? mapChaptersPerPage : graphPageSize;
+  const pages = Math.max(1, Math.ceil(all.length / limit));
+  graphPage = Math.max(0, Math.min(graphPage, pages - 1));
+  const page = all.slice(graphPage * limit, (graphPage + 1) * limit);
+  const index = new Map(catalog.nodes.map(node => [node.id, node]));
+  const family = new Map();
+  const visible = overview ? page.flatMap(group => {
+    family.set(group.id, group.id);
+    const topics = group.topics.map(id => index.get(id)).filter(Boolean);
+    for (const topic of topics) family.set(topic.id, group.id);
+    return [group, ...topics];
+  }) : page;
+  const connections = overview ? catalog.overview_edges : catalog.edges;
+  $("overview").disabled = overview && graphPage === 0;
+  $("graph-prev").disabled = graphPage === 0;
+  $("graph-next").disabled = graphPage === pages - 1;
   const previous = nodes;
-  const courses = [...new Set(snapshot.nodes.map(node => node.course))].sort();
+  const keyFor = node => family.get(node.id) || node.course;
+  const courses = [...new Set(visible.map(keyFor))].sort();
   for (const course of courses) color(course);
-  nodes = new Map(snapshot.nodes.map((data, index) => {
+  nodes = new Map(visible.map((data, index) => {
     const known = previous.get(data.id);
-    const course = courses.indexOf(data.course);
+    const course = courses.indexOf(keyFor(data));
     const angle = index * 2.39996;
     const spread = 29 * Math.sqrt(index + 1);
     const center = 100 * (course - (courses.length - 1) / 2);
@@ -64,19 +103,20 @@ function ingest(snapshot) {
       x: center + Math.cos(angle) * spread, y: Math.sin(angle) * spread, vx: 0, vy: 0,
     };
     return [data.id, {...data, x: motion.x, y: motion.y, vx: motion.vx, vy: motion.vy,
-      center, color: color(data.course), radius: data.kind === "file" ? 8 : 5}];
+      center, color: color(keyFor(data)), radius: data.kind === "section" ? 5 : 8}];
   }));
-  edges = snapshot.edges.filter(edge => nodes.has(edge.source) && nodes.has(edge.target));
+  edges = connections.filter(edge => nodes.has(edge.source) && nodes.has(edge.target));
   if (!nodes.has(selected)) selected = null;
   if (!nodes.has(hovered)) hovered = null;
   if (drag?.node && !nodes.has(drag.node)) drag = null;
   heat = Math.max(heat, previous.size === 0 ? 1 : .35);
   $("metrics").textContent = [
-    `${nodes.size} nodi`, `${edges.length} collegamenti`, `${courses.length} corsi`,
-    ...(snapshot.pending ? [`${snapshot.pending} delta in coda`] : []),
+    overview ? "Panoramica" : chapter?.title || "Risultato",
+    overview ? `${page.length} capitoli · ${visible.length - page.length} concetti` : `${visible.length} di ${all.length} nodi`,
+    ...(pages > 1 ? [`Pagina ${graphPage + 1}/${pages}`] : []),
   ].join("  ·  ");
   $("courses").replaceChildren(...courses.map(course => {
-    const label = element("span", course);
+    const label = element("span", nodes.get(course)?.title || course);
     const marker = element("i", "", "swatch");
     marker.style.setProperty("--node-color", color(course));
     label.prepend(marker);
@@ -86,7 +126,7 @@ function ingest(snapshot) {
   $("empty").textContent = "Aggiungi un file .tex o .md al workspace per iniziare.";
   refreshFilters();
   updateSearch();
-  if (firstSnapshot && nodes.size) {
+  if ((firstSnapshot || reset) && nodes.size) {
     firstSnapshot = false;
     fit();
   }
@@ -157,6 +197,7 @@ function simulate() {
     }
   }
   for (const edge of edges) {
+    if (edge.kind === "semantic") continue;
     const a = nodes.get(edge.source), b = nodes.get(edge.target);
     const dx = b.x - a.x, dy = b.y - a.y;
     const distance = Math.max(1, Math.hypot(dx, dy));
@@ -192,6 +233,7 @@ function draw(time) {
   const pulse = reducedMotion.matches ? .5 : (1 + Math.sin(time / 550)) / 2;
   for (const edge of activeEdges()) {
     const a = nodes.get(edge.source), b = nodes.get(edge.target);
+    if (edge.kind === "semantic" && (chapterId || searchNode) && a.id !== focus && b.id !== focus) continue;
     const related = !focus || a.id === focus || b.id === focus;
     const semantic = edge.kind === "semantic";
     const hierarchy = edge.kind === "hierarchy";
@@ -250,15 +292,40 @@ function updateSearch() {
   results.hidden = !query;
   results.replaceChildren();
   if (!query) return;
-  const hits = [...nodes.values()].map(node => ({node, rank: searchRank(node, query)}))
+  const index = new Map();
+  for (const node of [...(catalog?.groups || []), ...(catalog?.headings || []), ...(catalog?.nodes || [])]) {
+    index.set(node.id, node);
+  }
+  const hits = [...index.values()].map(node => ({node, rank: searchRank(node, query)}))
     .filter(hit => Number.isFinite(hit.rank)).sort((a, b) => a.rank - b.rank).slice(0, 10);
   if (!hits.length) results.append(element("p", "Nessun nodo corrispondente."));
   for (const {node} of hits) {
     const button = element("button", node.title + " · " + node.course);
     button.type = "button";
-    button.addEventListener("click", () => select(node.id, true));
+    button.addEventListener("click", () => visit(node));
     results.append(button);
   }
+}
+
+function visit(node) {
+  if (node.kind === "group") {
+    chapterId = node.id;
+    graphPage = 0;
+    searchNode = null;
+    $("search").value = "";
+    showScope(true);
+    select(nodes.keys().next().value);
+    return;
+  }
+  const group = catalog.groups.find(item => item.members.includes(node.id)) ||
+    catalog.groups.find(item => item.file === node.file);
+  chapterId = group?.id || null;
+  const member = group?.members.indexOf(node.id) ?? -1;
+  searchNode = member < 0 ? node : null;
+  graphPage = member < 0 ? 0 : Math.floor(member / graphPageSize);
+  $("search").value = "";
+  showScope(true);
+  select(node.id, true);
 }
 
 function select(id, center = false) {
@@ -279,6 +346,13 @@ function renderDetails() {
   if (!node) {
     details.replaceChildren(element("h2", "Dettagli nodo"),
       element("p", "Seleziona un nodo per leggere l’anteprima e vedere i collegamenti."));
+    return;
+  }
+  if (node.kind === "group") {
+    const enter = element("button", "Entra nel capitolo", "action");
+    enter.type = "button";
+    enter.addEventListener("click", () => visit(node));
+    details.replaceChildren(element("h2", node.title), element("p", node.summary), enter);
     return;
   }
   const neighbors = adjacency.get(node.id) || new Map();
@@ -391,6 +465,18 @@ $("zoom-out").addEventListener("click", () => zoom(width / 2, height / 2, 1 / 1.
 new ResizeObserver(resize).observe(canvas);
 resize();
 requestAnimationFrame(draw);
+
+$("overview").addEventListener("click", () => {
+  chapterId = searchNode = null;
+  graphPage = 0;
+  showScope(true);
+});
+$("graph-prev").addEventListener("click", () => { graphPage--; showScope(true); });
+$("graph-next").addEventListener("click", () => { graphPage++; showScope(true); });
+canvas.addEventListener("dblclick", event => {
+  const node = nodes.get(hit(event.offsetX, event.offsetY));
+  if (node?.kind === "group") visit(node);
+});
 
 const events = new EventSource("/api/events");
 events.addEventListener("graph", event => ingest(JSON.parse(event.data)));

@@ -65,10 +65,8 @@ func Listen(ctx context.Context, port int, store *graph.Store, edit func(context
 			return
 		}
 		snapshot, _ := store.Snapshot()
-		for _, node := range snapshot.Nodes {
-			if node.ID != body.ID {
-				continue
-			}
+		node, found := graph.SourceNode(snapshot, body.ID)
+		if found {
 			ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 			defer cancel()
 			if err := edit(ctx, node); err != nil {
