@@ -11,3 +11,11 @@ func cellRatio(fd uintptr, cols, rows int) float64 {
 	}
 	return .5
 }
+
+func cellPixels(fd uintptr) (int, int) {
+	size, err := unix.IoctlGetWinsize(int(fd), unix.TIOCGWINSZ)
+	if err != nil || size.Col == 0 || size.Row == 0 {
+		return 0, 0
+	}
+	return int(size.Xpixel) / int(size.Col), int(size.Ypixel) / int(size.Row)
+}

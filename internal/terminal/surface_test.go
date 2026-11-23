@@ -30,7 +30,7 @@ func TestGraphicMovesWithoutRetransmittingAndClearsBeforeLeaving(t *testing.T) {
 		}
 	}
 	write(ansi.Truncate(surface.Marker([]Placement{p})+"0123456789", 6, ""))
-	p.Y = 1
+	p.Y, p.OffsetX, p.OffsetY, p.BehindText = 1, 3, 4, true
 	write(surface.Marker([]Placement{p}) + "next")
 	write(leaveAlt)
 	data, err := os.ReadFile(path)
@@ -42,7 +42,8 @@ func TestGraphicMovesWithoutRetransmittingAndClearsBeforeLeaving(t *testing.T) {
 		t.Fatal("the internal frame marker leaked or was truncated")
 	}
 	if strings.Count(output, "a=t,f=100") != 1 || strings.Count(output, "a=p") != 2 ||
-		!strings.Contains(output, "\x1b[4;9H") || !strings.Contains(output, "\x1b[2;9H") {
+		!strings.Contains(output, "\x1b[4;9H") || !strings.Contains(output, "\x1b[2;9H") ||
+		!strings.Contains(output, "z=-1,c=4,r=3,X=3,Y=4;") {
 		t.Fatalf("unexpected upload or placements: %q", output)
 	}
 	if i, j := strings.Index(output, "a=d,d=I"), strings.Index(output, leaveAlt); i < 0 || i >= j {

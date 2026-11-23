@@ -129,6 +129,16 @@ func (m *Model) mouse(event tea.MouseEvent) tea.Cmd {
 			return m.openSidebarList()
 		}
 	}
+	if m.tab == homeTab && main.contains(event.X, event.Y) {
+		_, hits := m.homeContent(main.cols, main.rows)
+		for _, hit := range hits {
+			if hit.box.contains(event.X-main.x, event.Y-main.y) {
+				m.focus, m.cursor = mainFocus, hit.index
+				return m.activate()
+			}
+		}
+		return nil
+	}
 	if main.contains(event.X, event.Y) && m.tab != editorTab && m.tab != graphTab &&
 		!(m.tab == todoTab && m.showSummary) && !(m.tab == activityTab && m.agents.detail != 0) {
 		m.focus = mainFocus

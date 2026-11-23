@@ -43,7 +43,7 @@ func TestCourseHomeKeepsPreviewRoadmapAndShortcutsInFrame(t *testing.T) {
 	}
 	model.width, model.height = 120, 42
 	view := ansi.Strip(model.View())
-	for _, marker := range []string{"1 Home", "2 Scrittura", "3 Grafo", "R Mostra/nascondi", "TODO · 2", "Anteprima PDF", "Roadmap · 1/2", "─▶"} {
+	for _, marker := range []string{"1 Home", "2 Scrittura", "3 Grafo", "Riprendi", "Nuovo capitolo", "Delega", "Capitoli", "R Mostra/nascondi", "TODO · 2", "Anteprima PDF", "Roadmap · 1/2", "─▶"} {
 		if !strings.Contains(view, marker) {
 			t.Errorf("view does not contain %q", marker)
 		}
@@ -117,5 +117,24 @@ func TestSidebarTabsFilterIndependentlyAndAreClickable(t *testing.T) {
 	model.sideKey("enter")
 	if model.tab != todoTab || model.taskKind != parser.MaintenanceTask {
 		t.Fatal("Enter should open the corresponding full TODO list")
+	}
+}
+
+func TestCourseHomeCardUsesItsWholeHitArea(t *testing.T) {
+	model := Model{width: 132, height: 42, todoFraction: 1, course: rootCourse}
+	l := model.layout()
+	_, hits := model.homeContent(l.left-2, l.body-2)
+	if len(hits) != int(homeActionCount) {
+		t.Fatalf("got %d actionable regions", len(hits))
+	}
+	card := hits[createChapter].box
+	model.mouse(tea.MouseEvent{
+		X:      1 + card.x + card.cols/2,
+		Y:      l.header + 1 + card.y + card.rows - 2,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionPress,
+	})
+	if model.form.mode != "chapter" || model.cursor != int(createChapter) {
+		t.Fatalf("click in the description did not open the chapter form (mode %q, cursor %d)", model.form.mode, model.cursor)
 	}
 }

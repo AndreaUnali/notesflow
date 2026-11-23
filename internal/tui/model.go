@@ -633,17 +633,15 @@ func (m *Model) activate() tea.Cmd {
 		}
 		return nil
 	}
-	if m.tab == homeTab && m.cursor < len(homeActions) {
-		switch m.cursor {
-		case 0:
+	if m.tab == homeTab && m.cursor < int(homeActionCount) {
+		switch homeAction(m.cursor) {
+		case resumeNotes:
 			return m.setTab(editorTab)
-		case 1:
+		case createChapter:
 			m.form = inputForm{mode: "chapter"}
-		case 2:
+		case delegateNotes:
 			pos := m.savedPosition()
 			m.showAgentForm("delegate", 0, m.suggestedFile(), pos.Line)
-		case 3:
-			m.cursor = min(m.cursor+1, len(m.rows())-1)
 		}
 		return nil
 	}

@@ -68,8 +68,10 @@ func panel(title string, rows []string, width, height int, active bool) []string
 		style = accent.Bold(false)
 	}
 	count := max(0, width-2)
-	title = " " + clean(title) + " "
-	title = ansi.Truncate(title, count, "")
+	title = clean(title)
+	if title != "" {
+		title = ansi.Truncate(" "+title+" ", count, "")
+	}
 	out := []string{style.Render("╭" + title + strings.Repeat("─", max(0, count-lipgloss.Width(title))) + "╮")}
 	for i := 0; i < height-2; i++ {
 		row := ""
@@ -143,6 +145,9 @@ func (m Model) View() string {
 		case m.tab == apiTab:
 			title = "Dashboard API"
 			main = m.listRows(height)
+		case m.tab == homeTab:
+			title = "Home"
+			main, _ = m.homeContent(width, height)
 		default:
 			main = m.listRows(height)
 		}
@@ -273,9 +278,6 @@ func (m Model) listRows(height int) []string {
 	rows := []string{}
 	for i := start; i < min(len(items), start+height); i++ {
 		label := clean(items[i].text)
-		if m.tab == homeTab && i < len(homeActions)-1 && m.layout().left >= 82 {
-			label = fit(label, 42) + muted.Render(homeDetails[i])
-		}
 		if i == cursor && m.tab != apiTab {
 			rows = append(rows, accent.Render(" › "+label))
 		} else {
@@ -287,11 +289,6 @@ func (m Model) listRows(height int) []string {
 
 func listStart(cursor, length, height int) int {
 	return max(0, min(min(cursor, length-1)-height/2, length-height))
-}
-
-var homeDetails = []string{
-	"Riprendi la posizione di scrittura", "Crea il sorgente e aggiorna l’indice",
-	"Assegna un lavoro e scegli le fonti",
 }
 
 func (m Model) summaryRows() []string {

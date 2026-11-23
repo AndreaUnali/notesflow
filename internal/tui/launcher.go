@@ -23,6 +23,8 @@ type launchGraph struct {
 	graph         terminalGraph
 	image, dimmed *terminal.Graphic
 	text          []string
+	asset         graphRenderKey
+	paused        float64
 }
 
 type launcher struct {
@@ -32,6 +34,11 @@ type launcher struct {
 	graphs        []launchGraph
 	surface       *terminal.Surface
 	wordmark      *terminal.Graphic
+	brandKey      graphRenderKey
+	frame         string
+	matches       []network.Recent
+	cellW, cellH  int
+	started       time.Time
 	width, height int
 	query, notice string
 	chosen        string
@@ -59,13 +66,13 @@ func ChooseNetwork(ctx context.Context, surface *terminal.Surface) (string, erro
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	entries, err := network.List()
-	m := launcher{ctx: ctx, entries: entries, surface: surface, hover: -1, searching: true}
+	m := launcher{ctx: ctx, entries: entries, surface: surface, hover: -1, searching: true, started: time.Now()}
 	m.discovery = network.Discover(ctx, network.DefaultSearchRoots(entries))
 	if err != nil {
 		m.notice = err.Error()
 	}
 	m.prepareGraphs()
-	result, err := tea.NewProgram(m, tea.WithContext(ctx), tea.WithAltScreen(), tea.WithOutput(surface), tea.WithMouseAllMotion(), tea.WithFPS(30)).Run()
+	result, err := tea.NewProgram(m, tea.WithContext(ctx), tea.WithAltScreen(), tea.WithOutput(surface), tea.WithMouseAllMotion(), tea.WithFPS(45)).Run()
 	if err != nil {
 		return "", err
 	}
@@ -109,7 +116,7 @@ func (m launcher) waitNetworks() tea.Cmd {
 }
 
 func driftTick() tea.Cmd {
-	return tea.Tick(125*time.Millisecond, func(now time.Time) tea.Msg { return drift(now) })
+	return tea.Tick(33*time.Millisecond, func(now time.Time) tea.Msg { return drift(now) })
 }
 
 func (m launcher) results() []network.Recent {
@@ -134,7 +141,7 @@ func (m *launcher) prepareGraphs() {
 			continue
 		}
 		nodes, edges := item.Preview()
-		if len(nodes) > 0 {
+		if len(nodes) > 1 && len(edges) > 0 {
 			m.graphs = append(m.graphs, launchGraph{entry: item, graph: layoutGraph(0, edges, nodes, item.Root)})
 		}
 	}
@@ -192,6 +199,23 @@ func (m *launcher) openFolder() {
 }
 
 func (m launcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.update(msg)
+	switch v := msg.(type) {
+	case drift:
+		// The dot field, text and graph labels stay fixed during motion.
+	case tea.MouseMsg:
+		if tea.MouseEvent(v).Action != tea.MouseActionMotion || next.hover != m.hover {
+			next.matches = next.results()
+			next.frame = next.renderText(next.matches)
+		}
+	default:
+		next.matches = next.results()
+		next.frame = next.renderText(next.matches)
+	}
+	return next, cmd
+}
+
+func (m launcher) update(msg tea.Msg) (launcher, tea.Cmd) {
 	switch v := msg.(type) {
 	case foundNetworks:
 		hadGraphs := len(m.graphs) > 0
@@ -206,12 +230,13 @@ func (m launcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(drift, next)
 	case drift:
-		m.t += .125
+		m.t = time.Time(v).Sub(m.started).Seconds()
 		if len(m.graphs) > 0 {
 			return m, driftTick()
 		}
 	case tea.WindowSizeMsg:
 		m.width, m.height = v.Width, v.Height
+		m.cellW, m.cellH = m.surface.CellPixels()
 		m.renderGraphics()
 	case tea.MouseMsg:
 		event := tea.MouseEvent(v)
@@ -233,21 +258,26 @@ func (m launcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, cmd
 			}
 		}
-		previous := m.hover
-		boxes := m.graphBoxes(layout)
-		m.hover = -1
-		for i, box := range boxes {
-			if !m.pathOnly && box.contains(event.X, event.Y) {
-				m.hover = i
-				if previous != i {
-					m.held = m.t
-				}
-				if click {
-					cmd := m.pick(m.graphs[i].entry.Root)
-					return m, cmd
-				}
+		hover := -1
+		for i, box := range m.graphBoxes(layout) {
+			moving := m.graphPlacement(i, box)
+			graphicHit := cellRect{moving.X, moving.Y, moving.Cols, moving.Rows}
+			labelHit := cellRect{box.x, box.y + box.rows - 1, box.cols, 1}
+			if !m.pathOnly && (graphicHit.contains(event.X, event.Y) || labelHit.contains(event.X, event.Y)) {
+				hover = i
 				break
 			}
+		}
+		if m.hover != hover {
+			if m.hover >= 0 && m.hover < len(m.graphs) {
+				m.graphs = slices.Clone(m.graphs)
+				m.graphs[m.hover].paused += m.t - m.held
+			}
+			m.hover, m.held = hover, m.t
+		}
+		if click && hover >= 0 {
+			cmd := m.pick(m.graphs[hover].entry.Root)
+			return m, cmd
 		}
 	case tea.KeyMsg:
 		key := v.String()
@@ -337,12 +367,6 @@ func (m launcher) graphBoxes(l launchLayout) []cellRect {
 	var boxes []cellRect
 	free := l.search.x
 	for index := range m.graphs {
-		t := m.t
-		if index == m.hover {
-			t = m.held
-		}
-		dx := int(math.Round(3 * math.Sin(t*.75+float64(index)*2)))
-		dy := int(math.Round(2 * math.Cos(t*.58+float64(index)*2)))
 		if l.sideGraphs {
 			cols, rows := min(69, free-8), min(25, m.height/3)
 			center, y := free/2, (m.height-rows)/2
@@ -351,29 +375,56 @@ func (m launcher) graphBoxes(l launchLayout) []cellRect {
 			} else if len(m.graphs) >= 3 {
 				y = m.height/8 + index/2*m.height/2 - rows/5
 			}
-			boxes = append(boxes, cellRect{center - cols/2 + dx, max(0, y+dy), cols, rows})
+			boxes = append(boxes, cellRect{center - cols/2, max(0, y), cols, rows})
 		} else {
 			lane := m.width / len(m.graphs)
 			cols := min(48, lane-8)
-			boxes = append(boxes, cellRect{lane*index + (lane-cols)/2 + dx, m.height - l.graphRows - 2 + dy, cols, l.graphRows})
+			boxes = append(boxes, cellRect{lane*index + (lane-cols)/2, m.height - l.graphRows - 2, cols, l.graphRows})
 		}
 	}
 	return boxes
 }
 
+func (m launcher) graphPlacement(index int, box cellRect) terminal.Placement {
+	p := terminal.Placement{X: box.x, Y: box.y, Cols: box.cols, Rows: box.rows - 1, BehindText: true}
+	if m.cellW <= 0 || m.cellH <= 0 {
+		return p
+	}
+	t := m.t
+	if index == m.hover {
+		t = m.held
+	}
+	t -= m.graphs[index].paused
+	phase := float64(index) * 2
+	dx := int(math.Round(float64(m.cellW) * 1.7 * math.Sin(t*.55+phase)))
+	dy := int(math.Round(float64(m.cellH) * .8 * math.Cos(t*.44+phase)))
+	x := max(0, box.x*m.cellW+dx)
+	y := max(0, box.y*m.cellH+dy)
+	p.X, p.OffsetX = x/m.cellW, x%m.cellW
+	p.Y, p.OffsetY = y/m.cellH, y%m.cellH
+	return p
+}
+
 func (m *launcher) renderGraphics() {
 	l := m.layout()
-	m.wordmark = nil
-	if l.brand.rows > 1 {
-		m.wordmark = launchWordmark(l.brand.cols, l.brand.rows, m.surface.CellRatio(m.width, m.height))
+	ratio := m.surface.CellRatio(m.width, m.height)
+	brand := graphRenderKey{cols: l.brand.cols, rows: l.brand.rows, ratio: ratio}
+	if m.brandKey != brand {
+		m.brandKey, m.wordmark = brand, nil
+		if l.brand.rows > 1 {
+			m.wordmark = launchWordmark(l.brand.cols, l.brand.rows, ratio)
+		}
 	}
 	graphs := slices.Clone(m.graphs)
 	for i, box := range m.graphBoxes(l) {
+		key := graphRenderKey{cols: box.cols, rows: box.rows - 1, ratio: ratio, zoom: 1, transparent: true}
+		if graphs[i].asset == key {
+			continue
+		}
+		graphs[i].asset = key
 		if m.surface.Enabled() {
-			key := graphRenderKey{cols: box.cols, rows: box.rows - 1, ratio: m.surface.CellRatio(m.width, m.height), zoom: 1}
-			graphs[i].image = renderGraph(graphs[i].graph, key).graphic
-			key.ambience = true
-			graphs[i].dimmed = renderGraph(graphs[i].graph, key).graphic
+			result := renderGraph(graphs[i].graph, key)
+			graphs[i].image, graphs[i].dimmed = result.graphic, result.dimmed
 		} else {
 			graphs[i].text = launchTextGraph(graphs[i].graph, box.cols, box.rows-1)
 		}
@@ -383,11 +434,46 @@ func (m *launcher) renderGraphics() {
 
 func (m launcher) visible(l launchLayout) ([]network.Recent, int) {
 	results := m.results()
-	start := max(0, min(m.cursor-l.items.rows+1, len(results)-l.items.rows))
-	return results, start
+	return results, visibleStart(m.cursor, len(results), l.items.rows)
+}
+
+func visibleStart(cursor, count, rows int) int {
+	return max(0, min(cursor-rows+1, count-rows))
 }
 
 func (m launcher) View() string {
+	frame, matches := m.frame, m.matches
+	if frame == "" {
+		matches = m.results()
+		frame = m.renderText(matches)
+	}
+	l := m.layout()
+	var images []terminal.Placement
+	if m.wordmark != nil {
+		images = append(images, terminal.Placement{Graphic: m.wordmark, X: l.brand.x, Y: l.brand.y, Cols: l.brand.cols, Rows: l.brand.rows})
+	}
+	if !m.pathOnly {
+		for i, box := range m.graphBoxes(l) {
+			graph := m.graphs[i]
+			thumbnail := graph.image
+			if m.query != "" && !m.activeGraph(i, matches) {
+				thumbnail = graph.dimmed
+			}
+			if thumbnail != nil {
+				placement := m.graphPlacement(i, box)
+				placement.Graphic = thumbnail
+				images = append(images, placement)
+			}
+		}
+	}
+	return m.surface.Marker(images) + frame
+}
+
+func (m launcher) activeGraph(i int, matches []network.Recent) bool {
+	return m.hover == i || (m.query != "" && m.cursor < len(matches) && matches[m.cursor].Root == m.graphs[i].entry.Root)
+}
+
+func (m launcher) renderText(results []network.Recent) string {
 	if m.width < 18 || m.height < 11 {
 		return "Notesflow · enlarge terminal"
 	}
@@ -405,10 +491,7 @@ func (m launcher) View() string {
 	center := func(y int, text string) {
 		put(y, l.search.x, l.search.cols, centered(text, l.search.cols))
 	}
-	var images []terminal.Placement
-	if m.wordmark != nil {
-		images = append(images, terminal.Placement{Graphic: m.wordmark, X: l.brand.x, Y: l.brand.y, Cols: l.brand.cols, Rows: l.brand.rows})
-	} else {
+	if m.wordmark == nil {
 		center(l.brand.y+l.brand.rows/2, accent.Render("Notesflow"))
 	}
 	prompt := "Which note network do you want to open?"
@@ -427,7 +510,7 @@ func (m launcher) View() string {
 	for i, value := range input {
 		put(l.search.y+i, l.search.x, l.search.cols, value)
 	}
-	results, start := m.visible(l)
+	start := visibleStart(m.cursor, len(results), l.items.rows)
 	for i, item := range results[start:min(len(results), start+l.items.rows)] {
 		name := clean(item.Name)
 		path := clean(shortPath(item.Root))
@@ -479,16 +562,11 @@ func (m launcher) View() string {
 			break
 		}
 		graph := m.graphs[i]
-		active := m.hover == i || (m.query != "" && m.cursor < len(results) && results[m.cursor].Root == graph.entry.Root)
-		thumbnail, name := graph.image, muted.Render(clean(graph.entry.Name))
-		if active {
+		name := muted.Render(clean(graph.entry.Name))
+		if m.activeGraph(i, results) {
 			name = accent.Render("◉ " + clean(graph.entry.Name))
-		} else if m.query != "" {
-			thumbnail = graph.dimmed
 		}
-		if thumbnail != nil {
-			images = append(images, terminal.Placement{Graphic: thumbnail, X: box.x, Y: box.y, Cols: box.cols, Rows: box.rows - 1})
-		} else {
+		if graph.image == nil {
 			for y, line := range graph.text {
 				put(box.y+y, box.x, box.cols, line)
 			}
@@ -498,7 +576,7 @@ func (m launcher) View() string {
 	for i := range rows {
 		rows[i] = background(fit(rows[i], m.width))
 	}
-	return m.surface.Marker(images) + strings.Join(rows, "\n")
+	return strings.Join(rows, "\n")
 }
 
 func centered(s string, width int) string {

@@ -31,15 +31,15 @@ type graphRenderKey struct {
 	ratio, zoom            float64
 	pan                    point
 	dragVersion            uint64
-	ambience               bool
+	transparent            bool
 }
 
 type renderedGraph struct {
-	key           graphRenderKey
-	graphic       *terminal.Graphic
-	points        map[string]point
-	width, height int
-	scale         float64
+	key             graphRenderKey
+	graphic, dimmed *terminal.Graphic
+	points          map[string]point
+	width, height   int
+	scale           float64
 }
 
 func (m Model) graphRect() cellRect {
@@ -131,11 +131,13 @@ func renderGraph(g terminalGraph, key graphRenderKey) renderedGraph {
 	pixelsPerRow := max(7, min(22, int(min(850/float64(key.rows), 1200/(float64(key.cols)*key.ratio)))))
 	w, h := max(1, int(float64(key.cols*pixelsPerRow)*key.ratio)), key.rows*pixelsPerRow
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
-	draw.Draw(img, img.Bounds(), image.NewUniform(surfaceRGB), image.Point{}, draw.Src)
-	spacing := max(17, pixelsPerRow+4)
-	for y := spacing / 2; y < h; y += spacing {
-		for x := spacing / 2; x < w; x += spacing {
-			img.SetRGBA(x, y, hexColor(0x233047))
+	if !key.transparent {
+		draw.Draw(img, img.Bounds(), image.NewUniform(surfaceRGB), image.Point{}, draw.Src)
+		spacing := max(17, pixelsPerRow+4)
+		for y := spacing / 2; y < h; y += spacing {
+			for x := spacing / 2; x < w; x += spacing {
+				img.SetRGBA(x, y, hexColor(0x233047))
+			}
 		}
 	}
 	points := make(map[string]point, len(g.positions))
@@ -279,12 +281,16 @@ func renderGraph(g terminalGraph, key graphRenderKey) renderedGraph {
 		d.Src, d.Dot = image.NewUniform(item.shade), item.at
 		d.DrawString(item.caption)
 	}
-	if key.ambience {
-		draw.DrawMask(img, img.Bounds(), image.NewUniform(surfaceRGB), image.Point{},
-			image.NewUniform(color.Alpha{A: 160}), image.Point{}, draw.Over)
-	}
 	graphic, _ := terminal.Image(img)
-	return renderedGraph{key: key, graphic: graphic, points: points, width: w, height: h, scale: scale}
+	var dimmed *terminal.Graphic
+	if key.transparent {
+		// RGBA stores premultiplied channels. Fade the color and alpha together.
+		for i, value := range img.Pix {
+			img.Pix[i] = uint8(uint16(value) * 3 / 8)
+		}
+		dimmed, _ = terminal.Image(img)
+	}
+	return renderedGraph{key: key, graphic: graphic, dimmed: dimmed, points: points, width: w, height: h, scale: scale}
 }
 
 func labelText(s string, limit int) string {
@@ -326,6 +332,7 @@ func dot(img *image.RGBA, p point, r float64, c color.RGBA, alpha float64) {
 			img.Pix[i] = uint8(float64(img.Pix[i])*(1-a) + float64(c.R)*a)
 			img.Pix[i+1] = uint8(float64(img.Pix[i+1])*(1-a) + float64(c.G)*a)
 			img.Pix[i+2] = uint8(float64(img.Pix[i+2])*(1-a) + float64(c.B)*a)
+			img.Pix[i+3] = uint8(float64(img.Pix[i+3])*(1-a) + 255*a)
 		}
 	}
 }

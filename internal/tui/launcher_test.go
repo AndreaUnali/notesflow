@@ -44,3 +44,25 @@ func TestLauncherGraphBoxesLeaveSpaceForThePicker(t *testing.T) {
 		}
 	}
 }
+
+func TestLauncherDriftMovesByPixelsAndFreezesOnHover(t *testing.T) {
+	model := launcher{width: 280, height: 76, cellW: 10, cellH: 23, hover: -1}
+	model.graphs = []launchGraph{{entry: network.Recent{Name: "Cloud"}}}
+	box := model.graphBoxes(model.layout())[0]
+	first := model.graphPlacement(0, box)
+	model.t = .2
+	next := model.graphPlacement(0, box)
+	if dx := (next.X-first.X)*model.cellW + next.OffsetX - first.OffsetX; dx <= 0 || dx >= model.cellW {
+		t.Fatalf("motion should cover less than one cell, got %d pixels", dx)
+	}
+	model.hover, model.held = 0, model.t
+	model.t = 1.4
+	if frozen := model.graphPlacement(0, box); frozen != next {
+		t.Fatalf("hover changed the placement: first %+v frozen %+v", next, frozen)
+	}
+	model.graphs[0].paused = model.t - model.held
+	model.hover = -1
+	if resumed := model.graphPlacement(0, box); resumed != next {
+		t.Fatalf("leaving hover jumped to %+v from %+v", resumed, next)
+	}
+}

@@ -47,6 +47,8 @@ func Image(img image.Image) (*Graphic, error) {
 type Placement struct {
 	Graphic          *Graphic
 	X, Y, Cols, Rows int
+	OffsetX, OffsetY int
+	BehindText       bool
 }
 
 type activeImage struct {
@@ -95,6 +97,14 @@ func (s *Surface) CellRatio(cols, rows int) float64 {
 		return cellRatio(s.File.Fd(), cols, rows)
 	}
 	return .5
+}
+
+// CellPixels reports the terminal cell dimensions for sub-cell placement.
+func (s *Surface) CellPixels() (width, height int) {
+	if s != nil && s.enabled {
+		return cellPixels(s.File.Fd())
+	}
+	return 0, 0
 }
 
 // Marker goes at the start of the first text line. Write consumes it under
@@ -208,5 +218,14 @@ func transmit(out *bytes.Buffer, id uint32, png []byte) {
 }
 
 func place(out *bytes.Buffer, id uint32, p Placement) {
-	fmt.Fprintf(out, "\x1b7\x1b[%d;%dH\x1b_Ga=p,i=%d,p=1,q=2,C=1,z=1,c=%d,r=%d;%s\x1b8", p.Y+1, p.X+1, id, p.Cols, p.Rows, terminator)
+	z := 1
+	if p.BehindText {
+		z = -1
+	}
+	fmt.Fprintf(out, "\x1b7\x1b[%d;%dH\x1b_Ga=p,i=%d,p=1,q=2,C=1,z=%d,c=%d,r=%d",
+		p.Y+1, p.X+1, id, z, p.Cols, p.Rows)
+	if p.OffsetX != 0 || p.OffsetY != 0 {
+		fmt.Fprintf(out, ",X=%d,Y=%d", p.OffsetX, p.OffsetY)
+	}
+	out.WriteString(";" + terminator + "\x1b8")
 }
