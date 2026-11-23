@@ -15,12 +15,12 @@ import (
 )
 
 type layout struct {
-	left, right, body, todo, pdf, header, road int
-	split                                      bool
+	left, right, body, todo, pdf, header, road, footer int
+	split                                              bool
 }
 
 func (m Model) layout() layout {
-	l := layout{left: m.width, header: 3, road: 4}
+	l := layout{left: m.width, header: 3, road: 4, footer: 3}
 	if m.width < 75 {
 		l.header = 4
 	}
@@ -28,9 +28,9 @@ func (m Model) layout() layout {
 		l.header++
 	}
 	if m.roadCollapsed || m.height < 24 {
-		l.road = 1
+		l.road, l.footer = 0, 1
 	}
-	l.body = max(0, m.height-l.header-l.road-3)
+	l.body = max(0, m.height-l.header-l.road-l.footer)
 	l.split = m.width >= 66 || l.body < 12
 	if l.split {
 		l.left = m.width * 2 / 3
@@ -171,11 +171,10 @@ func (m Model) View() string {
 			lines = append(lines, aside...)
 		}
 	}
-	for len(lines) < m.height-l.road-3 {
+	for len(lines) < m.height-l.road-l.footer {
 		lines = append(lines, "")
 	}
-	lines = append(lines, m.roadRows(l.road)...)
-	lines = append(lines, muted.Render(fit(m.help(), m.width)), fit(clean(m.message), m.width), accent.Render(fit(m.status(), m.width)))
+	lines = append(lines, m.footerRows(l)...)
 	var images []terminal.Placement
 	if p := m.pdfPlacement(); p.Graphic != nil {
 		images = append(images, p)
@@ -372,47 +371,14 @@ func (m Model) milestones() []milestone {
 	return items
 }
 
-func (m Model) roadRows(height int) []string {
+func (m Model) roadRows() []string {
 	items := m.milestones()
-	done, total, reviews := 0, 0, 0
-	for _, item := range items {
-		if item.Done != nil {
-			total++
-			if *item.Done {
-				done++
-			}
-			if item.Evidence != nil && item.Evidence.Review != "" {
-				reviews++
-			}
-		}
-	}
-	progress := fmt.Sprintf("%d tappe", len(items))
-	if total > 0 {
-		progress = fmt.Sprintf("%d/%d completate", done, total)
-	}
-	if reviews > 0 {
-		progress += fmt.Sprintf(" · %d da verificare", reviews)
-	}
+	progress, _ := milestoneProgress(items)
 	keys := "r seleziona · R comprimi"
-	prefix := ""
-	if m.tab == editorTab || m.focus != mainFocus {
-		if !m.commandMode {
-			prefix = "Shift+Tab, poi "
-			keys = "Shift+Tab, poi r/R"
-		}
+	if (m.tab == editorTab || m.focus != mainFocus) && !m.commandMode {
+		keys = "Shift+Tab, poi r/R"
 	}
 	title := " Roadmap · " + progress + "  [" + keys + "]"
-	if height == 1 {
-		if m.focus == roadFocus && len(items) > 0 {
-			selected := min(m.roadCursor, len(items)-1)
-			return []string{accent.Render(fit(fmt.Sprintf("← %d/%d  %s →", selected+1, len(items), clean(items[selected].Title)), m.width))}
-		}
-		shortcut := "  [" + prefix + "R espandi]"
-		if !m.roadCollapsed {
-			shortcut = "  [" + prefix + "r seleziona]"
-		}
-		return []string{accent.Render(fit("▸ Roadmap · "+progress+shortcut, m.width))}
-	}
 	lines := []string{accent.Render(fit(title, m.width))}
 	if len(items) == 0 {
 		return append(lines, muted.Render(fit(" Aggiungi una roadmap nel corso", m.width)), "", "")
@@ -453,31 +419,38 @@ func (m Model) roadRows(height int) []string {
 	return lines
 }
 
-func (m Model) status() string {
-	provider := m.manager
-	if provider == nil {
-		return " " + clean(m.cfg.Project)
+func (m Model) status() (full, concise string) {
+	parts := []string{clean(m.cfg.Project)}
+	if status := m.agentStatus(); status != "" {
+		parts = append(parts, status)
+		concise = status
 	}
-	state := provider.Snapshot()
-	current := "provider in attesa"
-	if len(state.Profiles) > 0 {
-		profile := state.Profiles[0]
-		for _, candidate := range state.Profiles {
-			if candidate.ID == state.Active {
-				profile = candidate
-				break
+	if m.manager != nil {
+		state := m.manager.Snapshot()
+		current, shortProvider := "provider in attesa", "provider in attesa"
+		if len(state.Profiles) > 0 {
+			profile := state.Profiles[0]
+			for _, candidate := range state.Profiles {
+				if candidate.ID == state.Active {
+					profile = candidate
+					break
+				}
+			}
+			current = clean(profile.ID + "/" + profile.Model + " · " + profile.Status)
+			shortProvider = clean(profile.ID + " · " + profile.Status)
+			if !profile.AvailableAt.IsZero() {
+				current += " → " + profile.AvailableAt.Local().Format("15:04")
+			} else if !profile.WindowEnd.IsZero() {
+				current += " → " + profile.WindowEnd.Local().Format("15:04")
 			}
 		}
-		current = clean(profile.ID + "/" + profile.Model + " · " + profile.Status)
-		if !profile.AvailableAt.IsZero() {
-			current += " → " + profile.AvailableAt.Local().Format("15:04")
-		} else if !profile.WindowEnd.IsZero() {
-			current += " → " + profile.WindowEnd.Local().Format("15:04")
+		parts = append(parts, current)
+		if concise == "" {
+			concise = shortProvider
 		}
 	}
-	project := " " + clean(m.cfg.Project)
-	if status := m.agentStatus(); status != "" {
-		return project + "  │  " + status + "  │  " + current
+	if concise == "" {
+		concise = parts[0]
 	}
-	return project + "  │  " + current
+	return " " + strings.Join(parts, "  │  "), concise
 }

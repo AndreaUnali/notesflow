@@ -99,7 +99,11 @@ func (m *Model) mouse(event tea.MouseEvent) tea.Cmd {
 	if !click {
 		return nil
 	}
-	if event.Y == m.height-l.road-3 {
+	if m.roadButton(l).contains(event.X, event.Y) {
+		if l.road == 0 && !m.roadCollapsed {
+			cmd, _ := m.command("r")
+			return cmd
+		}
 		return m.toggleRoad()
 	}
 	if l.todo >= 3 {

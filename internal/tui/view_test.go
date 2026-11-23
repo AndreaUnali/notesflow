@@ -138,3 +138,51 @@ func TestCourseHomeCardUsesItsWholeHitArea(t *testing.T) {
 		t.Fatalf("click in the description did not open the chapter form (mode %q, cursor %d)", model.form.mode, model.cursor)
 	}
 }
+
+func TestCollapsedRoadmapSharesOneFullWidthRow(t *testing.T) {
+	done := true
+	model := Model{width: 240, height: 45, todoFraction: 0, tab: editorTab, ctx: t.Context(),
+		cfg: config.Config{Project: "Cloud Computing"}, message: "PDF aggiornato",
+		snapshot: graph.Snapshot{Roadmaps: []parser.Roadmap{
+			{File: "roadmap.md", Items: []parser.Milestone{{Title: "Grafi", Done: &done}}},
+		}},
+	}
+	expanded := model.layout()
+	pdfRows := model.pdfRect().rows
+	model.roadCollapsed = true
+	collapsed := model.layout()
+	if collapsed.road != 0 || collapsed.footer != 1 || collapsed.body-expanded.body != 6 || model.pdfRect().rows-pdfRows != 6 {
+		t.Fatalf("collapsed layout did not give reclaimed rows to the editor and PDF: %+v to %+v", expanded, collapsed)
+	}
+	for _, width := range []int{240, 100, 48, 24} {
+		model.width = width
+		lines := strings.Split(ansi.Strip(model.View()), "\n")
+		if len(lines) != model.height || ansi.StringWidth(lines[len(lines)-1]) != width {
+			t.Fatalf("footer must fill a single row at width %d", width)
+		}
+		if width == 240 {
+			for _, marker := range []string{"Roadmap", "1/1", "Shift+Tab", "PDF aggiornato", "Cloud Computing"} {
+				if !strings.Contains(lines[len(lines)-1], marker) {
+					t.Errorf("%q missing from %q", marker, lines[len(lines)-1])
+				}
+			}
+		}
+	}
+}
+
+func TestCompactFooterOnlyRoadmapSegmentTogglesRoadmap(t *testing.T) {
+	model := Model{width: 132, height: 44, todoFraction: 1, roadCollapsed: true, ctx: t.Context(),
+		cfg: config.Config{Project: "Cloud Computing"}, message: "PDF aggiornato"}
+	button := model.roadButton(model.layout())
+	click := tea.MouseEvent{Y: button.y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress}
+	click.X = button.cols + 2
+	model.mouse(click)
+	if !model.roadCollapsed {
+		t.Fatal("clicking an adjacent segment expanded the roadmap")
+	}
+	click.X = 2
+	model.mouse(click)
+	if model.roadCollapsed {
+		t.Fatal("clicking the roadmap segment did not expand it")
+	}
+}

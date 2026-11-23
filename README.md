@@ -33,7 +33,7 @@ Accedi con `gh auth login` se GitHub CLI lo richiede. Se ti manca `latexmk`, puo
 | --- | --- |
 | **1–5** | Home, scrittura, grafo, TODO, attività. Le schede si possono anche cliccare. |
 | **Shift+Tab** | Porta il focus alle schede dall’editor o da un pannello. Usa **1–5** o **←/→** e **Invio**. **Tab** torna al pannello. |
-| **r** / **R** | Seleziona le tappe / mostra o comprimi la roadmap. |
+| **r** / **R** | Seleziona le tappe / espande la roadmap o la riunisce con scorciatoie e stato nella barra in basso. |
 | **t** | Seleziona il riquadro TODO. **←/→** passa fra Tutti, Classici, Visual e Manutenzione. |
 | **p** | Seleziona il PDF. **←/→** cambia pagina e **t** alterna pagina e testo. |
 | **b** / **c** / **q** | Compila / cambia corso / esci. |
