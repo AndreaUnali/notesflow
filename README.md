@@ -99,7 +99,7 @@ Ogni concetto ha fino a tre relazioni semantiche. La panoramica ne mostra una se
 
 Configura un profilo LLM in [notesflow.example.json](notesflow.example.json), oppure installa e configura OpenCode nel tuo terminale. Quando il profilo è quello locale, Notesflow usa l’OpenCode già configurato per **Chiedi** e **Delega**. Grafo, TODO e compilazione funzionano anche senza un modello remoto.
 
-- Lo stato dell’agente è sempre in alto a destra. Cliccalo oppure premi **Shift+Tab**, poi **g**, per aprire il dettaglio con la fase, le fonti e l’esito.
+- Lo stato dell’agente è sempre in alto a destra. Cliccalo oppure premi **Shift+Tab**, poi **g**, per aprire il dettaglio con la fase, le fonti e l’esito. Se compare **Errore**, trovi in cima la causa e cosa controllare. **Invio** riprova la stessa delega.
 - Da **Scrittura**, premi **Shift+Tab**, poi **?**. Chiedi un aiuto sulla sezione corrente, su una formula o sull’ultima compilazione. La risposta è in **Attività**. Usa **f** per continuare o **w** per chiedere di applicare la proposta.
 - Da **Home**, seleziona **Delega**. Scegli un file o una sezione con **←/→**, inserisci la richiesta e premi **Tab** per scegliere le fonti. Usa **Invio** per aggiungere il risultato evidenziato o digita un intervallo come `slide.pdf:12-14`. **Ctrl+S** invia.
 - L’agente riceve il testo della destinazione e le fonti selezionate. Il risultato si applica quando il blocco assegnato è ancora quello di partenza. Se stai scrivendo altrove nello stesso buffer, salvi tutto insieme con **:w**. In caso di conflitto apri **Attività** per confrontare proposta e appunti.

@@ -95,6 +95,7 @@ type Job struct {
 	State        string
 	Error        string
 	PauseReason  string `json:",omitempty"`
+	ErrorHelp    string `json:",omitempty"`
 	Deadline     time.Time
 	Updated      time.Time
 	Decision     string
@@ -205,10 +206,16 @@ func (b *Book) ForCourse(course string) []Job {
 	return jobs
 }
 
+// SourceError identifies an error before any model request was sent.
+type SourceError struct{ Err error }
+
+func (e *SourceError) Error() string { return e.Err.Error() }
+func (e *SourceError) Unwrap() error { return e.Err }
+
 func Run(ctx context.Context, root string, backend Backend, job Job, prepared func()) (Draft, error) {
 	materials, err := readMaterials(ctx, root, job.Sources)
 	if err != nil {
-		return Draft{}, err
+		return Draft{}, &SourceError{err}
 	}
 	request := Request{
 		Target: job.Target, Goal: job.Goal, Write: job.Write, Original: job.Original,

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/AndreaUnali/notesflow/internal/agent"
 	"github.com/AndreaUnali/notesflow/internal/editor"
+	"github.com/AndreaUnali/notesflow/internal/providers"
 	"github.com/AndreaUnali/notesflow/internal/workflow"
 )
 
@@ -73,7 +75,7 @@ func (m *Model) startAgentContext() tea.Cmd {
 }
 
 func (m *Model) beginAgent(job agent.Job) tea.Cmd {
-	job.State, job.Error, job.PauseReason = agent.Working, "", ""
+	job.State, job.Error, job.PauseReason, job.ErrorHelp = agent.Working, "", "", ""
 	job.Result.Question, job.Deadline = nil, time.Time{}
 	if !m.saveAgent(job) {
 		return nil
@@ -138,9 +140,17 @@ func (m *Model) finishAgent(result agentResult) {
 		return
 	}
 	if result.err != nil {
-		job.State, job.Error = agent.Failed, result.err.Error()
+		job.State = agent.Failed
+		job.Error, job.ErrorHelp = providers.Explain(result.err)
+		var source *agent.SourceError
+		if errors.As(result.err, &source) {
+			job.ErrorHelp = "Controlla il file nella sezione Fonti e riprova con Invio. Per cambiare l’intervallo di pagine, selezionalo in una nuova delega."
+		}
 		if m.saveAgent(job) {
-			m.toastAgent(job.ID, "Agente · richiesta interrotta", job.Error, false)
+			if m.agents.detail == job.ID {
+				m.agents.offset = 0
+			}
+			m.toastAgent(job.ID, "Agente · errore · apri i dettagli", job.Error, false)
 		}
 		return
 	}
@@ -481,6 +491,18 @@ func (m Model) agentDetailLines(job agent.Job, width int) []string {
 		phase += " · " + last
 	}
 	add(phase)
+	if job.State == agent.Failed {
+		add("Causa · " + job.Error)
+		help := job.ErrorHelp
+		if help == "" {
+			help = "Premi Invio per un nuovo tentativo."
+			if strings.Contains(job.Error, "OpenCode run fallito") {
+				help = "Premi Invio per riprovare con la nuova diagnostica. Se usi un router locale, controlla la disponibilità del modello in OpenCode."
+			}
+		}
+		add("Come risolvere · " + help)
+		add("")
+	}
 	if job.State == agent.Paused {
 		if job.PauseReason != "" {
 			add(job.PauseReason)
@@ -502,7 +524,7 @@ func (m Model) agentDetailLines(job agent.Job, width int) []string {
 		}
 		add(mark + " · " + job.Decision + " · " + job.DecisionWhy)
 	}
-	if job.Error != "" {
+	if job.Error != "" && job.State != agent.Failed {
 		add(job.Error)
 	}
 	if job.State == agent.Waiting && job.Result.Question != nil {

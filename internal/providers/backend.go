@@ -1,7 +1,6 @@
 package providers
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -10,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -29,11 +27,11 @@ var httpClient = &http.Client{
 }
 
 func complete(ctx context.Context, p config.Profile, instructions, data string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
-	defer cancel()
 	if p.Driver == "opencode" {
 		return openCode(ctx, p.Model, instructions+"\n\n"+data)
 	}
+	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
 	body, err := json.Marshal(struct {
 		Model    string    `json:"model"`
 		Messages []message `json:"messages"`
@@ -52,7 +50,13 @@ func complete(ctx context.Context, p config.Profile, instructions, data string) 
 	}
 	res, err := httpClient.Do(req)
 	if err != nil {
-		return "", errors.New("richiesta HTTP fallita")
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return "", context.DeadlineExceeded
+		}
+		return "", &guidedError{"Il provider non ha risposto alla richiesta HTTP.", "Controlla la connessione e base_url in notesflow.json. Se usi un router locale, verifica che sia avviato."}
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
@@ -60,7 +64,7 @@ func complete(ctx context.Context, p config.Profile, instructions, data string) 
 		if res.StatusCode == http.StatusTooManyRequests && retry.IsZero() {
 			retry = time.Now().Add(time.Minute)
 		}
-		return "", &requestError{message: fmt.Sprintf("HTTP %d", res.StatusCode), retryAt: retry}
+		return "", &requestError{message: fmt.Sprintf("HTTP %d", res.StatusCode), retryAt: retry, status: res.StatusCode}
 	}
 	var result struct{ Choices []struct{ Message message } }
 	if err := json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&result); err != nil || len(result.Choices) == 0 || strings.TrimSpace(result.Choices[0].Message.Content) == "" {
@@ -77,59 +81,4 @@ func retryAfter(value string) time.Time {
 		return timestamp
 	}
 	return time.Time{}
-}
-
-// Run background analysis in an empty directory with tool permissions denied.
-func openCode(ctx context.Context, model, prompt string) (string, error) {
-	dir, err := os.MkdirTemp("", "notesflow-opencode-*")
-	if err != nil {
-		return "", err
-	}
-	defer os.RemoveAll(dir)
-	args := []string{"run", "--format", "json"}
-	if model != "" {
-		args = append(args, "--model", model)
-	}
-	args = append(args, "--", prompt)
-	cmd := exec.CommandContext(ctx, "opencode", args...)
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "OPENCODE_CONFIG_CONTENT={\"permission\":{\"*\":\"deny\"}}")
-	pipe, err := cmd.StdoutPipe()
-	if err != nil {
-		return "", err
-	}
-	if err = cmd.Start(); err != nil {
-		return "", err
-	}
-	var content strings.Builder
-	var eventError bool
-	scanner := bufio.NewScanner(pipe)
-	scanner.Buffer(make([]byte, 4096), 1<<20)
-	for scanner.Scan() {
-		var event struct {
-			Type string
-			Part struct{ Text string }
-		}
-		if json.Unmarshal(scanner.Bytes(), &event) != nil {
-			continue
-		}
-		switch event.Type {
-		case "text":
-			if content.Len()+len(event.Part.Text) <= 1<<20 {
-				content.WriteString(event.Part.Text)
-			} else {
-				eventError = true
-			}
-		case "error":
-			eventError = true
-		}
-	}
-	if scanner.Err() != nil {
-		_ = cmd.Process.Kill()
-	}
-	err = cmd.Wait()
-	if err != nil || eventError || scanner.Err() != nil || strings.TrimSpace(content.String()) == "" {
-		return "", errors.New("OpenCode run fallito o senza testo; controllare il profilo e l’autenticazione OpenCode")
-	}
-	return strings.TrimSpace(content.String()), nil
 }

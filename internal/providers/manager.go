@@ -60,6 +60,7 @@ type Manager struct {
 type requestError struct {
 	message string
 	retryAt time.Time
+	status  int
 }
 
 func (e *requestError) Error() string { return e.message }
@@ -68,6 +69,8 @@ type Unavailable struct {
 	RetryAt time.Time
 	cause   error
 }
+
+func (e *Unavailable) Unwrap() error { return e.cause }
 
 func (e *Unavailable) Error() string {
 	if e.cause != nil {

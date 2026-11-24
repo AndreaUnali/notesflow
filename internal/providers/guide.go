@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os/exec"
 	"slices"
 
 	"github.com/AndreaUnali/notesflow/internal/agent"
@@ -25,16 +24,13 @@ Se write è true, prepara replacement come bozza effettiva. Se can_ask è true e
 	decode := func(text string) error {
 		var result agent.Draft
 		if err := json.Unmarshal([]byte(unfence(text)), &result); err != nil || result.Summary == "" {
-			return errors.New("risposta JSON dell’agente non valida")
+			return &guidedError{"Il modello ha risposto senza una proposta JSON valida.", "Riprova con una richiesta più circoscritta o usa un altro modello nel profilo della delega."}
 		}
 		draft = result
 		return nil
 	}
 	realProfile := func(p config.Profile) bool { return p.Driver != "mock" }
 	if !slices.ContainsFunc(m.profiles, realProfile) {
-		if _, err := exec.LookPath("opencode"); err != nil {
-			return draft, errors.New("installa e configura OpenCode oppure seleziona un profilo LLM in notesflow.json")
-		}
 		text, err := openCode(ctx, "", instructions+"\n\n"+string(input))
 		if err != nil {
 			return draft, err
@@ -49,5 +45,16 @@ Se write è true, prepara replacement come bozza effettiva. Se can_ask è true e
 		}
 		return decode(text)
 	})
+	var unavailable *Unavailable
+	if errors.As(err, &unavailable) && unavailable.cause == nil && unavailable.RetryAt.IsZero() {
+		for _, profile := range m.Snapshot().Profiles {
+			switch profile.Status {
+			case "chiave assente":
+				return draft, &guidedError{"Manca la chiave API del profilo " + profile.ID + ".", "Imposta la variabile api_key_env indicata in notesflow.json e riapri Notesflow."}
+			case "OpenCode assente":
+				return draft, &guidedError{"Il profilo " + profile.ID + " richiede OpenCode nel PATH.", "Installa OpenCode o seleziona un altro profilo in notesflow.json."}
+			}
+		}
+	}
 	return draft, err
 }
