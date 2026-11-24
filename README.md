@@ -4,6 +4,8 @@
 
 Scrivi appunti LaTeX, controlla il PDF e segui i collegamenti tra i concetti dalla stessa sessione nel terminale. La home riunisce azioni, TODO, anteprima e roadmap. Il grafo e l’editor si aprono nella stessa interfaccia.
 
+![Home del corso con azioni, TODO, anteprima PDF e roadmap](docs/screenshots/home.png)
+
 ## Installa e prova
 
 ### Homebrew
@@ -46,14 +48,14 @@ go run ./cmd/notesflow --workspace examples/workspace/analisi
 
 ## Il primo giro
 
+![Schermata di avvio con ricerca, progetti recenti e grafi degli appunti](docs/screenshots/launcher.png)
+
 1. Avvia `notesflow` e scrivi il nome di una **Note Network**. La ricerca include i recenti e i progetti LaTeX in Scrivania, Documenti e nella cartella corrente. Premi **Ctrl+O** per aggiungere una cartella esistente, oppure incolla il percorso nella ricerca. Se hai già un progetto in mente, usa `notesflow --workspace /percorso/del/corso`.
 2. In Home, **Riprendi** riapre file e cursore dell’ultima sessione. **Nuovo capitolo** propone il file e il punto in cui includerlo nel documento principale. TODO, PDF e roadmap sono visibili dalla Home.
 3. Premi **Shift+Tab**, poi **2**, per scrivere. Il PDF occupa la colonna destra. Salva con **:w** e compila con **Shift+Tab**, poi **b**.
 4. Premi **Shift+Tab**, poi **3**, per esplorare il grafo con il buffer aperto. Usa **↑/↓** e **Invio** per aprire un nodo, **Esc** per tornare alla panoramica e **/** per cercare una sezione.
 
-![Scrittura nella TUI con la colonna PDF estesa](docs/screenshots/editor.png)
-
-![Grafo neon con nodi etichettati, gerarchia e connessioni semantiche](docs/screenshots/graph.png)
+![Scrittura LaTeX in Neovim con anteprima PDF estesa e roadmap compressa](docs/screenshots/editor.png)
 
 ## Navigare e uscire
 
@@ -85,6 +87,8 @@ Una casella `[x]` negli appunti Markdown o un commento LaTeX `% DONE:` con la st
 Premi **Shift+Tab**, poi **r**, per selezionare la tappa, **e** per aprire l’evidenza negli appunti o **Invio** per aprire la roadmap. Conferma con `[x]` oppure aggiungi `<!-- notesflow: pending -->` in coda alla tappa per tenerla aperta. Notesflow aggiorna lo stato nella TUI al salvataggio.
 
 ## Esplora il grafo
+
+![Grafo del corso con capitoli, concetti collegati e anteprima PDF](docs/screenshots/graph.png)
 
 La panoramica mostra i concetti principali di ogni capitolo, i riferimenti LaTeX e una selezione dei collegamenti più forti. Apri un capitolo per vedere le altre sezioni. Usa **Pg↑/Pg↓** se un capitolo occupa più pagine e **Invio** per aprire la riga sorgente. La ricerca trova anche le intestazioni minute.
 
