@@ -73,6 +73,10 @@ func (m *Model) mouse(event tea.MouseEvent) tea.Cmd {
 		if m.noticeRect().contains(event.X, event.Y) {
 			return m.openAgentActivity(m.agents.notice.id)
 		}
+		_, agentButton := m.agentButton()
+		if agentButton.contains(event.X, event.Y) {
+			return m.openCurrentAgent()
+		}
 		m.commandMode = false
 		for _, tab := range m.tabs() {
 			if tab.hit.contains(event.X, event.Y) {

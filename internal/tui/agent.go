@@ -27,9 +27,12 @@ type agentUI struct {
 }
 
 type agentRun struct {
-	token  int
-	cancel context.CancelFunc
+	token     int
+	cancel    context.CancelFunc
+	preparing bool
 }
+
+type agentPrepared struct{ id, token int }
 
 type agentResult struct {
 	id, token int
@@ -70,13 +73,18 @@ func (m *Model) startAgentContext() tea.Cmd {
 }
 
 func (m *Model) beginAgent(job agent.Job) tea.Cmd {
-	job.State, job.Error = agent.Working, ""
+	job.State, job.Error, job.PauseReason = agent.Working, "", ""
+	job.Result.Question, job.Deadline = nil, time.Time{}
 	if !m.saveAgent(job) {
 		return nil
 	}
 	if job.ID == 0 {
 		job.ID = m.agents.book.Jobs[len(m.agents.book.Jobs)-1].ID
 	}
+	if m.agents.notice.id == job.ID {
+		m.agents.notice = agentNotice{}
+	}
+	m.agents.queued = slices.DeleteFunc(m.agents.queued, func(notice agentNotice) bool { return notice.id == job.ID })
 	if m.agents.running == nil {
 		m.agents.running = make(map[int]agentRun)
 	}
@@ -86,13 +94,25 @@ func (m *Model) beginAgent(job agent.Job) tea.Cmd {
 	ctx, cancel := context.WithCancel(m.ctx)
 	m.agents.next++
 	token := m.agents.next
-	m.agents.running[job.ID] = agentRun{token, cancel}
+	preparing := len(job.Sources) > 0
+	m.agents.running[job.ID] = agentRun{token: token, cancel: cancel, preparing: preparing}
 	root, backend := m.root, m.manager
-	return func() tea.Msg {
+	prepared := make(chan struct{}, 1)
+	work := func() tea.Msg {
 		defer cancel()
-		result, err := agent.Run(ctx, root, backend, job)
+		defer close(prepared)
+		result, err := agent.Run(ctx, root, backend, job, func() { prepared <- struct{}{} })
 		return agentResult{id: job.ID, token: token, result: result, err: err}
 	}
+	if !preparing {
+		return work
+	}
+	return tea.Batch(work, func() tea.Msg {
+		if _, ok := <-prepared; ok {
+			return agentPrepared{job.ID, token}
+		}
+		return nil
+	})
 }
 
 func (m *Model) saveAgent(job agent.Job) bool {
@@ -287,21 +307,27 @@ func (m *Model) appliedAgent(result appliedAgent) {
 	}
 }
 
-func (m *Model) pauseAgent(job agent.Job) tea.Cmd {
-	if job.State == agent.Working || job.State == agent.Waiting {
-		if running, ok := m.agents.running[job.ID]; ok {
-			running.cancel()
-			delete(m.agents.running, job.ID)
-		}
-		job.State, job.Deadline = agent.Paused, time.Time{}
-		if m.agents.notice.id == job.ID {
-			m.agents.notice = agentNotice{}
-		}
-		m.saveAgent(job)
-		return nil
+func (m *Model) pauseAgent(job agent.Job) {
+	if job.State != agent.Working && job.State != agent.Waiting {
+		return
 	}
-	if job.State == agent.Paused && job.Result.Question != nil {
-		job.State, job.Deadline = agent.Waiting, time.Time{}
+	job.State, job.Deadline = agent.Paused, time.Time{}
+	job.PauseReason = agent.ManualPause
+	if !m.saveAgent(job) {
+		return
+	}
+	if running, ok := m.agents.running[job.ID]; ok {
+		running.cancel()
+		delete(m.agents.running, job.ID)
+	}
+	if m.agents.notice.id == job.ID {
+		m.agents.notice = agentNotice{}
+	}
+}
+
+func (m *Model) resumeAgent(job agent.Job) tea.Cmd {
+	if job.State == agent.Paused && job.Result.Question != nil && job.Decision == "" {
+		job.State, job.PauseReason = agent.Waiting, ""
 		m.saveAgent(job)
 		return nil
 	}
@@ -326,6 +352,8 @@ func (m Model) fileAgentStatus(file string) string {
 				return "● Agente al lavoro"
 			case agent.Waiting:
 				return "◆ Domanda dell’agente"
+			case agent.Paused:
+				return "◌ Delega in pausa"
 			case agent.Review:
 				return "! Proposta da verificare"
 			}
@@ -334,18 +362,51 @@ func (m Model) fileAgentStatus(file string) string {
 	return ""
 }
 
-func (m Model) agentStatus() string {
+// Give questions and work in progress precedence over older paused jobs.
+func (m Model) currentAgentJob() agent.Job {
+	var current agent.Job
+	best := -1
 	for _, job := range m.agentTasks() {
+		priority := 0
 		switch job.State {
-		case agent.Working, agent.Ready:
-			return "● Agente · " + clean(job.Target.Title) + " · al lavoro"
 		case agent.Waiting:
-			return "◆ Agente · " + clean(job.Target.Title) + " · domanda"
-		case agent.Paused:
-			return "◌ Agente · " + clean(job.Target.Title) + " · in pausa"
+			priority = 3
+		case agent.Working, agent.Ready:
+			priority = 2
+		case agent.Paused, agent.Failed, agent.Review:
+			priority = 1
+		}
+		if priority > best {
+			best, current = priority, job
 		}
 	}
-	return ""
+	return current
+}
+
+func (m Model) agentPhase(job agent.Job) string {
+	switch job.State {
+	case agent.Working:
+		if run, ok := m.agents.running[job.ID]; ok {
+			if run.preparing {
+				return "Legge le fonti"
+			}
+			return "Attende il modello"
+		}
+	case agent.Ready:
+		if m.agents.applying == job.ID {
+			return "Applica agli appunti"
+		}
+	case agent.Waiting:
+		return "Attende una risposta"
+	}
+	return job.State
+}
+
+func (m *Model) openCurrentAgent() tea.Cmd {
+	if job := m.currentAgentJob(); job.ID > 0 {
+		return m.openAgentActivity(job.ID)
+	}
+	return m.setTab(activityTab)
 }
 
 func (m *Model) openAgentActivity(id int) tea.Cmd {
@@ -381,8 +442,11 @@ func (m *Model) agentDetailKey(key string) (tea.Cmd, bool) {
 			return m.answerAgent(job, int(key[0]-'a'), false), true
 		}
 		return nil, false
-	case " ":
-		return m.pauseAgent(job), true
+	case "P":
+		m.pauseAgent(job)
+	case "enter":
+		// A detail page must not forward Enter to the row behind it.
+		return m.resumeAgent(job), true
 	case "f":
 		m.showAgentForm("followup", job.ID, job.Target.File, job.Target.Line)
 	case "s":
@@ -408,7 +472,22 @@ func (m Model) agentDetailLines(job agent.Job, width int) []string {
 			lines = append(lines, foldLine(clean(row), width)...)
 		}
 	}
-	add(fmt.Sprintf("%s · %s:%d · %s", job.State, job.Target.File, max(job.Target.Line, job.Applied), job.Target.Title))
+	phase := m.agentPhase(job)
+	if !job.Updated.IsZero() {
+		last := "Aggiornata alle " + job.Updated.Local().Format("15:04:05")
+		if job.State == agent.Working {
+			last = "Da " + max(0, time.Since(job.Updated)).Truncate(time.Second).String()
+		}
+		phase += " · " + last
+	}
+	add(phase)
+	if job.State == agent.Paused {
+		if job.PauseReason != "" {
+			add(job.PauseReason)
+		}
+		add("Invio riprende la delega.")
+	}
+	add(fmt.Sprintf("%s:%d · %s", job.Target.File, max(job.Target.Line, job.Applied), job.Target.Title))
 	add(job.Goal)
 	if len(job.Sources) > 0 {
 		add("Fonti")
@@ -479,11 +558,15 @@ func (m Model) foldAgentHelp() string {
 	}
 	switch job.State {
 	case agent.Waiting:
-		return " a–c Rispondi · Spazio Pausa · f Messaggio · s Fonte · Esc Lista"
+		return " a–c Rispondi · P Pausa · f Messaggio · s Fonte · Esc Lista"
 	case agent.Answered:
 		return " f Continua · w Chiedi di applicare · s Fonte · e Appunti · Esc Lista"
-	case agent.Paused, agent.Failed:
-		return " Spazio Riprendi · f Messaggio · s Fonte · e Appunti · Esc Lista"
+	case agent.Working:
+		return " P Pausa · f Messaggio · s Fonte · e Appunti · Esc Lista"
+	case agent.Paused:
+		return " Invio Riprendi · f Messaggio · s Fonte · e Appunti · Esc Lista"
+	case agent.Failed:
+		return " Invio Riprova · f Messaggio · s Fonte · e Appunti · Esc Lista"
 	default:
 		return " ↑↓ Leggi · f Messaggio · s Fonte · e Appunti · Esc Lista"
 	}

@@ -363,7 +363,7 @@ func (m *Model) submitAgentForm() tea.Cmd {
 		return nil
 	}
 	m.form = inputForm{}
-	m.message = "Agente al lavoro · " + job.Target.Title
+	m.message = ""
 	if asking || m.tab == activityTab {
 		if job.ID == 0 {
 			job.ID = m.agents.book.Jobs[len(m.agents.book.Jobs)-1].ID

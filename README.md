@@ -70,6 +70,7 @@ Premi **Shift+Tab** per raggiungere la barra di navigazione da qualunque vista, 
 | **t** | Seleziona i TODO. **←/→** passa fra Tutti, Classici, Visual e Manutenzione. |
 | **p** | Seleziona il PDF. **←/→** cambia pagina e **t** alterna pagina e testo. |
 | **b** / **c** / **?** | Compila il PDF, cambia corso o chiedi all’agente. |
+| **g** | Apri il dettaglio dell’agente da qualsiasi vista. |
 
 Per chiudere una sessione, usa **Shift+Tab**, poi **q**. Puoi anche cliccare **q Esci**. Se Neovim ha modifiche non salvate, Notesflow lascia aperta la sessione e ti riporta alla barra. Premi **2** per tornare in Scrittura. Chiudi un eventuale modulo con **Esc** e premi **Esc** in Neovim per tornare alla modalità normale. Salva tutti i buffer con **:wall**, poi ripeti **Shift+Tab → q**.
 
@@ -98,10 +99,11 @@ Ogni concetto ha fino a tre relazioni semantiche. La panoramica ne mostra una se
 
 Configura un profilo LLM in [notesflow.example.json](notesflow.example.json), oppure installa e configura OpenCode nel tuo terminale. Quando il profilo è quello locale, Notesflow usa l’OpenCode già configurato per **Chiedi** e **Delega**. Grafo, TODO e compilazione funzionano anche senza un modello remoto.
 
+- Lo stato dell’agente è sempre in alto a destra. Cliccalo oppure premi **Shift+Tab**, poi **g**, per aprire il dettaglio con la fase, le fonti e l’esito.
 - Da **Scrittura**, premi **Shift+Tab**, poi **?**. Chiedi un aiuto sulla sezione corrente, su una formula o sull’ultima compilazione. La risposta è in **Attività**. Usa **f** per continuare o **w** per chiedere di applicare la proposta.
 - Da **Home**, seleziona **Delega**. Scegli un file o una sezione con **←/→**, inserisci la richiesta e premi **Tab** per scegliere le fonti. Usa **Invio** per aggiungere il risultato evidenziato o digita un intervallo come `slide.pdf:12-14`. **Ctrl+S** invia.
 - L’agente riceve il testo della destinazione e le fonti selezionate. Il risultato si applica quando il blocco assegnato è ancora quello di partenza. Se stai scrivendo altrove nello stesso buffer, salvi tutto insieme con **:w**. In caso di conflitto apri **Attività** per confrontare proposta e appunti.
-- Quando l’agente ha una domanda appare una notifica in alto a destra. Cliccala o premi **Shift+Tab**, poi **5**, per scegliere. Dopo 90 secondi si applica la scelta consigliata e compare un **TODO Manutenzione**. Puoi cambiare il tempo con `agent.question_seconds`. **Spazio** mette in pausa o riprende una delega, **s** aggiunge una fonte e **f** invia un messaggio.
+- Quando l’agente ha una domanda appare una notifica in alto a destra. Cliccala o premi **Shift+Tab**, poi **5**, per scegliere. Dopo 90 secondi si applica la scelta consigliata e compare un **TODO Manutenzione**. Puoi cambiare il tempo con `agent.question_seconds`. Nel dettaglio, **P** mette in pausa, **Invio** riprende o riprova, **s** aggiunge una fonte e **f** invia un messaggio. Se chiudi Notesflow durante la richiesta, la delega resta in pausa al prossimo avvio.
 - Le figure suggerite compaiono come **TODO Visual** con il riferimento alla slide o la descrizione del diagramma. A delega completata, la notifica apre il riepilogo con fonti e modifiche.
 
 Per aprire direttamente OpenCode, usa `notesflow agent --workspace /percorso/del/corso`.

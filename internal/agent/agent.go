@@ -23,6 +23,9 @@ const (
 	Completed = "Completata"
 	Answered  = "Risposta"
 	Failed    = "Errore"
+
+	ManualPause  = "Pausa richiesta da Attività."
+	sessionEnded = "La sessione precedente si è chiusa durante la richiesta."
 )
 
 type Target struct {
@@ -91,6 +94,7 @@ type Job struct {
 	Result       Draft
 	State        string
 	Error        string
+	PauseReason  string `json:",omitempty"`
 	Deadline     time.Time
 	Updated      time.Time
 	Decision     string
@@ -129,9 +133,19 @@ func Open(root string) (*Book, error) {
 		return nil, err
 	}
 	for i := range book.Jobs {
-		if book.Jobs[i].State == Working {
-			book.Jobs[i].State = Paused
-			book.Jobs[i].Error = "Riprendi la richiesta da Attività."
+		job := &book.Jobs[i]
+		if job.State == Working {
+			job.State = Paused
+			job.PauseReason = sessionEnded
+			job.Result.Question = nil
+		}
+		if job.State == Paused && job.PauseReason == "" {
+			switch job.Error {
+			case "Riprendi la richiesta da Attività.":
+				job.PauseReason, job.Error = sessionEnded, ""
+			case "":
+				job.PauseReason = ManualPause
+			}
 		}
 	}
 	return book, nil
@@ -191,7 +205,7 @@ func (b *Book) ForCourse(course string) []Job {
 	return jobs
 }
 
-func Run(ctx context.Context, root string, backend Backend, job Job) (Draft, error) {
+func Run(ctx context.Context, root string, backend Backend, job Job, prepared func()) (Draft, error) {
 	materials, err := readMaterials(ctx, root, job.Sources)
 	if err != nil {
 		return Draft{}, err
@@ -200,6 +214,12 @@ func Run(ctx context.Context, root string, backend Backend, job Job) (Draft, err
 		Target: job.Target, Goal: job.Goal, Write: job.Write, Original: job.Original,
 		Sources: materials, History: job.History[max(0, len(job.History)-12):],
 		Decision: job.Decision, Compilation: job.Compilation, CanAsk: job.Decision == "" && job.Write,
+	}
+	if err := ctx.Err(); err != nil {
+		return Draft{}, err
+	}
+	if prepared != nil {
+		prepared()
 	}
 	draft, err := backend.Guide(ctx, request)
 	if err != nil {

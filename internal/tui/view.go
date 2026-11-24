@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/AndreaUnali/notesflow/internal/agent"
 	"github.com/AndreaUnali/notesflow/internal/palette"
 	"github.com/AndreaUnali/notesflow/internal/parser"
 	"github.com/AndreaUnali/notesflow/internal/terminal"
@@ -213,7 +214,8 @@ func (m Model) tabs() []tabControl {
 }
 
 func (m Model) header(l layout) []string {
-	lines := []string{fit(accent.Render(" ◉  NOTESFLOW")+"  /  "+clean(m.scopeName()), m.width)}
+	status, button := m.agentButton()
+	lines := []string{fit(accent.Render(" ◉  NOTESFLOW")+"  /  "+clean(m.scopeName()), button.x) + status}
 	tabRows := 1
 	if m.width < 57 {
 		tabRows = 2
@@ -229,11 +231,48 @@ func (m Model) header(l layout) []string {
 		lines[tab.hit.y] += style.Render("  "+tab.label+"  ") + " "
 	}
 	first := m.navigationHint()
-	second := " ? Agente · r/R Roadmap · p PDF · t TODO · b Compila · c Corso · a API"
+	second := " g Dettagli agente · ? Chiedi · r/R Roadmap · p PDF · t TODO · b Compila · c Corso · a API"
 	if l.header == 3 {
 		return append(lines, muted.Render(fit(strings.TrimRight(first+"  "+strings.TrimSpace(second), " "), m.width)))
 	}
 	return append(lines, muted.Render(fit(first, m.width)), muted.Render(fit(second, m.width)))
+}
+
+func (m Model) agentButton() (string, cellRect) {
+	job := m.currentAgentJob()
+	phase := m.agentPhase(job)
+	if phase == "" {
+		phase = "Pronto"
+	}
+	style := muted
+	switch job.State {
+	case agent.Working, agent.Ready:
+		style = accent
+	case agent.Waiting, agent.Paused, agent.Review:
+		style = graphColors[3]
+	case agent.Failed:
+		style = pink
+	}
+	budget := max(0, m.width-14)
+	label := " Agente · " + phase + "  [g] "
+	if target := clean(job.Target.Title); target != "" {
+		withTarget := " Agente · " + phase + " · " + target + "  [g] "
+		if lipgloss.Width(withTarget) <= budget {
+			label = withTarget
+		}
+	}
+	if lipgloss.Width(label) > budget && job.ID > 0 {
+		label = " Agente · " + job.State + " [g] "
+	}
+	if lipgloss.Width(label) > budget {
+		label = " " + phase + " "
+		if job.ID > 0 {
+			label = " " + job.State + " "
+		}
+	}
+	label = ansi.Truncate(label, budget, "…")
+	width := lipgloss.Width(label)
+	return style.Background(lipgloss.Color(palette.Surface)).Render(label), cellRect{m.width - width, 0, width, 1}
 }
 
 func (m Model) navigationHint() string {
@@ -433,10 +472,6 @@ func (m Model) roadRows() []string {
 
 func (m Model) status() (full, concise string) {
 	parts := []string{clean(m.cfg.Project)}
-	if status := m.agentStatus(); status != "" {
-		parts = append(parts, status)
-		concise = status
-	}
 	if m.manager != nil {
 		state := m.manager.Snapshot()
 		current, shortProvider := "provider in attesa", "provider in attesa"

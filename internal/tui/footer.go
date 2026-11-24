@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/AndreaUnali/notesflow/internal/agent"
 	"github.com/AndreaUnali/notesflow/internal/palette"
 )
 
@@ -164,6 +165,16 @@ func (m Model) briefHelp() string {
 		return "Shift+Tab · :w"
 	case m.tab == graphTab:
 		return "/ Cerca · ↑↓ · Invio"
+	case m.tab == activityTab && m.agents.detail != 0 && m.agents.book != nil:
+		if job, ok := m.selectedAgentJob(); ok {
+			switch job.State {
+			case agent.Paused:
+				return "Invio Riprendi"
+			case agent.Failed:
+				return "Invio Riprova"
+			}
+		}
+		return "↑↓ Leggi · Esc Lista"
 	default:
 		return "↑↓ · Invio · Tab"
 	}

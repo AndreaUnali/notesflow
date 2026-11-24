@@ -277,6 +277,11 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 		file, _ := filepath.Rel(m.root, v.position)
 		m.showAgentForm("ask", 0, filepath.ToSlash(file), v.line)
 		m.form.buffer, m.form.bufferFile = v.buffer, filepath.ToSlash(file)
+	case agentPrepared:
+		if run, ok := m.agents.running[v.id]; ok && run.token == v.token {
+			run.preparing = false
+			m.agents.running[v.id] = run
+		}
 	case agentResult:
 		m.finishAgent(v)
 		cmd := m.advanceAgent(time.Now())
@@ -497,6 +502,8 @@ func (m *Model) command(key string) (tea.Cmd, bool) {
 			return m.openAgentActivity(m.agents.notice.id), true
 		}
 		return m.setTab(int(key[0] - '1')), true
+	case "g":
+		return m.openCurrentAgent(), true
 	case "?":
 		return m.startAgentContext(), true
 	case "r":
@@ -897,7 +904,7 @@ func (m Model) rows() []row {
 			if job.Write {
 				label = "Delega"
 			}
-			rows = append(rows, row{text: fmt.Sprintf("%s · %s · %s", label, job.Target.Title, job.State)})
+			rows = append(rows, row{text: fmt.Sprintf("%s · %s · %s", label, job.Target.Title, m.agentPhase(job))})
 		}
 		events := m.store.Activity()
 		for i := len(events) - 1; i >= 0; i-- {
