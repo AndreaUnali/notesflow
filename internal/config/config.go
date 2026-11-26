@@ -20,8 +20,16 @@ type Profile struct {
 	Model        string `json:"model"`
 	BaseURL      string `json:"base_url,omitempty"`
 	APIKeyEnv    string `json:"api_key_env,omitempty"`
+	LocalKey     string `json:"-"`
 	RequestLimit int    `json:"request_limit,omitempty"`
 	Window       string `json:"window,omitempty"`
+}
+
+func (p Profile) APIKey() string {
+	if p.LocalKey != "" {
+		return p.LocalKey
+	}
+	return os.Getenv(p.APIKeyEnv)
 }
 
 func (p Profile) Duration() time.Duration {
@@ -47,6 +55,7 @@ type Tools struct {
 	PDFViewer   string `json:"pdf_viewer"`
 	MainTeX     string `json:"main_tex,omitempty"`
 	PDF         string `json:"pdf,omitempty"`
+	BuildDir    string `json:"build_dir,omitempty"`
 }
 
 type Agent struct {
@@ -55,6 +64,7 @@ type Agent struct {
 
 type Config struct {
 	Project   string    `json:"project"`
+	Structure string    `json:"structure,omitempty"`
 	Providers Providers `json:"providers"`
 	Semantic  Semantic  `json:"semantic"`
 	Tools     Tools     `json:"tools"`
@@ -62,19 +72,28 @@ type Config struct {
 }
 
 func Load(root, filename string) (Config, error) {
-	cfg := Config{
+	return LoadWithSettings(root, filename, Settings{})
+}
+
+func defaults(root string) Config {
+	return Config{
 		Project:   filepath.Base(root),
 		Providers: Providers{Mode: "byok", Active: "locale", Profiles: []Profile{{ID: "locale", Driver: "mock", Model: "affinità lessicale"}}},
 		Semantic:  Semantic{Enabled: true, CandidateLimit: 20, DeltaRunes: 4000},
 		Agent:     Agent{QuestionSeconds: 90},
 		Tools:     Tools{NvimServer: os.Getenv("NVIM"), LatexEngine: "latexmk", PDFViewer: "Skim"},
 	}
+}
+
+func LoadWithSettings(root, filename string, settings Settings) (Config, error) {
+	cfg := defaults(root)
 	explicit := filename != ""
 	if !explicit {
 		filename = filepath.Join(root, "notesflow.json")
 	}
 	file, err := os.Open(filename)
 	if errors.Is(err, os.ErrNotExist) && !explicit {
+		settings.apply(&cfg)
 		return cfg, nil
 	}
 	if err != nil {
@@ -83,13 +102,28 @@ func Load(root, filename string) (Config, error) {
 	defer file.Close()
 	d := json.NewDecoder(file)
 	d.DisallowUnknownFields()
-	if err = d.Decode(&cfg); err != nil {
+	workspace := struct {
+		*Config
+		Providers json.RawMessage `json:"providers"`
+	}{Config: &cfg}
+	if err = d.Decode(&workspace); err != nil {
 		return cfg, fmt.Errorf("%s: %w", filename, err)
 	}
 	if d.Decode(new(any)) != io.EOF {
 		return cfg, fmt.Errorf("%s: atteso un solo oggetto JSON", filename)
 	}
+	if len(workspace.Providers) == 0 {
+		settings.apply(&cfg)
+	} else if err = decodeProviders(workspace.Providers, &cfg.Providers); err != nil {
+		return cfg, fmt.Errorf("%s: %w", filename, err)
+	}
 	return cfg, cfg.validate()
+}
+
+func decodeProviders(raw json.RawMessage, providers *Providers) error {
+	d := json.NewDecoder(strings.NewReader(string(raw)))
+	d.DisallowUnknownFields()
+	return d.Decode(providers)
 }
 
 func (cfg Config) validate() error {

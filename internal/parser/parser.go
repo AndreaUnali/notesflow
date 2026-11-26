@@ -46,7 +46,10 @@ type Task struct {
 	Text    string `json:"text"`
 }
 
-const MaintenanceTask = "MANUTENZIONE"
+const (
+	MaintenanceTask = "MANUTENZIONE"
+	AITask          = "TODO-AI"
+)
 
 type Completion struct {
 	Text string
@@ -102,7 +105,7 @@ type Document struct {
 }
 
 var (
-	taskRE     = regexp.MustCompile(`(?i)^\s*TODO\s*(VISUAL|MANUTENZIONE)?\s*:\s*(.+?)\s*$`)
+	taskRE     = regexp.MustCompile(`(?i)^\s*TODO(-AI|\s*(?:VISUAL|MANUTENZIONE))?\s*:\s*(.+?)\s*$`)
 	headingRE  = regexp.MustCompile(`^\s*(#{1,6})\s+(.+?)\s*#*\s*$`)
 	checkboxRE = regexp.MustCompile(`^(\s*)(?:[-+*]|\d+[.)])\s+\[([ xX])\]\s+(.+?)\s*$`)
 	bulletRE   = regexp.MustCompile(`^(\s*)(?:[-+*]|\d+[.)])\s+(.+?)\s*$`)
@@ -217,7 +220,10 @@ func Parse(file string, data []byte) Document {
 				section := doc.Sections[current]
 				kind := "TODO"
 				if task[1] != "" {
-					kind = strings.ToUpper(task[1])
+					kind = strings.ToUpper(strings.TrimSpace(task[1]))
+					if kind == "-AI" {
+						kind = AITask
+					}
 				}
 				doc.Tasks = append(doc.Tasks, Task{section.ID, file, number, section.Title, kind, task[2]})
 			}
@@ -300,6 +306,12 @@ func splitTeXComment(line string) (string, string) {
 }
 
 type texCommand struct{ name, arg string }
+
+// ClearAITask removes the task comment, preserving any source before it.
+func ClearAITask(line string) string {
+	code, _ := splitTeXComment(line)
+	return strings.TrimRight(code, " \t")
+}
 
 func texCommands(text string) map[int][]texCommand {
 	lines := strings.Split(text, "\n")

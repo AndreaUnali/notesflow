@@ -36,9 +36,10 @@ type Target struct {
 }
 
 type Ref struct {
-	File  string `json:"file"`
-	First int    `json:"first_page,omitempty"`
-	Last  int    `json:"last_page,omitempty"`
+	File    string `json:"file"`
+	First   int    `json:"first_page,omitempty"`
+	Last    int    `json:"last_page,omitempty"`
+	Heading string `json:"heading,omitempty"`
 }
 
 func (r Ref) String() string {
@@ -70,11 +71,12 @@ type Visual struct {
 }
 
 type Draft struct {
-	Summary    string    `json:"summary"`
-	Text       string    `json:"replacement"`
-	Visuals    []Visual  `json:"visuals"`
-	Question   *Question `json:"question"`
-	References []string  `json:"references"`
+	Summary          string    `json:"summary"`
+	Text             string    `json:"replacement"`
+	Visuals          []Visual  `json:"visuals"`
+	Question         *Question `json:"question"`
+	References       []string  `json:"references"`
+	QuestionFallback bool      `json:"question_fallback,omitempty"`
 }
 
 type Turn struct {
@@ -105,18 +107,21 @@ type Job struct {
 	Buffered     bool
 	BufferedHash string
 	Compilation  string
+	Todo         *TodoWork `json:",omitempty"`
 }
 
 type Request struct {
-	Target      Target     `json:"target"`
-	Goal        string     `json:"goal"`
-	Write       bool       `json:"write"`
-	Original    string     `json:"original"`
-	Sources     []Material `json:"sources"`
-	History     []Turn     `json:"history"`
-	Decision    string     `json:"decision,omitempty"`
-	Compilation string     `json:"compilation,omitempty"`
-	CanAsk      bool       `json:"can_ask"`
+	Target       Target     `json:"target"`
+	Goal         string     `json:"goal"`
+	Write        bool       `json:"write"`
+	Original     string     `json:"original"`
+	Sources      []Material `json:"sources"`
+	History      []Turn     `json:"history"`
+	Decision     string     `json:"decision,omitempty"`
+	Compilation  string     `json:"compilation,omitempty"`
+	CanAsk       bool       `json:"can_ask"`
+	ReadingBytes int        `json:"reading_bytes,omitempty"`
+	Todo         bool       `json:"todo_ai,omitempty"`
 }
 
 type Backend interface {
@@ -217,10 +222,14 @@ func Run(ctx context.Context, root string, backend Backend, job Job, prepared fu
 	if err != nil {
 		return Draft{}, &SourceError{err}
 	}
+	if err := condenseSources(ctx, backend, job, materials); err != nil {
+		return Draft{}, err
+	}
 	request := Request{
 		Target: job.Target, Goal: job.Goal, Write: job.Write, Original: job.Original,
 		Sources: materials, History: job.History[max(0, len(job.History)-12):],
 		Decision: job.Decision, Compilation: job.Compilation, CanAsk: job.Decision == "" && job.Write,
+		Todo: job.Todo != nil,
 	}
 	if err := ctx.Err(); err != nil {
 		return Draft{}, err
@@ -232,6 +241,19 @@ func Run(ctx context.Context, root string, backend Backend, job Job, prepared fu
 	if err != nil {
 		return Draft{}, err
 	}
+	skippedQuestion := draft.Question != nil && !validQuestion(request, draft.Question)
+	if job.Write && (draft.Question == nil || skippedQuestion) && !hasEdits(draft) {
+		request.CanAsk = false
+		draft, err = backend.Guide(ctx, request)
+		if err != nil {
+			return Draft{}, err
+		}
+		skippedQuestion = skippedQuestion || draft.Question != nil
+	}
+	if skippedQuestion {
+		draft.Question = nil
+	}
+	draft.QuestionFallback = skippedQuestion && job.Write
 	draft.References = slices.DeleteFunc(draft.References, func(ref string) bool {
 		return !slices.ContainsFunc(job.Sources, func(source Ref) bool {
 			return ref == source.String() || ref == source.File
@@ -240,15 +262,19 @@ func Run(ctx context.Context, root string, backend Backend, job Job, prepared fu
 	if strings.TrimSpace(draft.Summary) == "" || len(draft.Summary) > 12000 || len(draft.Text) > 64000 || len(draft.Visuals) > 12 {
 		return Draft{}, errors.New("risposta dell’agente mancante o troppo lunga")
 	}
-	if q := draft.Question; q != nil {
-		if !request.CanAsk || len(q.Choices) < 2 || len(q.Choices) > 3 || q.Recommended < 0 || q.Recommended >= len(q.Choices) ||
-			strings.TrimSpace(q.Text) == "" || strings.TrimSpace(q.Why) == "" ||
-			slices.ContainsFunc(q.Choices, func(choice string) bool { return strings.TrimSpace(choice) == "" }) {
-			return Draft{}, errors.New("domanda dell’agente incompleta")
-		}
-	}
-	if job.Write && strings.TrimSpace(draft.Text) == "" && draft.Question == nil && len(draft.Visuals) == 0 {
-		return Draft{}, errors.New("l’agente non ha restituito modifiche")
+	if job.Write && draft.Question == nil && !hasEdits(draft) {
+		return Draft{}, errors.New("l’agente non ha prodotto una bozza applicabile dopo due tentativi")
 	}
 	return draft, nil
+}
+
+func validQuestion(request Request, q *Question) bool {
+	return request.CanAsk && len(q.Choices) >= 2 && len(q.Choices) <= 3 && q.Recommended >= 0 && q.Recommended < len(q.Choices) &&
+		strings.TrimSpace(q.Text) != "" && strings.TrimSpace(q.Why) != "" &&
+		!slices.ContainsFunc(q.Choices, func(choice string) bool { return strings.TrimSpace(choice) == "" })
+}
+
+func hasEdits(draft Draft) bool {
+	return strings.TrimSpace(draft.Text) != "" ||
+		slices.ContainsFunc(draft.Visuals, func(visual Visual) bool { return strings.TrimSpace(visual.Description) != "" })
 }

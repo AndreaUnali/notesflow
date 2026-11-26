@@ -24,6 +24,8 @@ type inputForm struct {
 	target             int
 	text               string
 	query              string
+	pdfRange           agent.Ref
+	pages              string
 	choices            []agent.Ref
 	selected           []agent.Ref
 	match              int
@@ -89,7 +91,16 @@ func (m Model) targets(texOnly bool) []agent.Target {
 }
 
 func (m Model) sourceChoices() []agent.Ref {
-	sources := m.agents.book.RecentSources(m.course)
+	var sources []agent.Ref
+	for _, recent := range m.agents.book.RecentSources(m.course) {
+		whole := agent.Ref{File: recent.File}
+		if !slices.Contains(sources, whole) {
+			sources = append(sources, whole)
+		}
+		if !slices.Contains(sources, recent) {
+			sources = append(sources, recent)
+		}
+	}
 	_ = filepath.WalkDir(m.scopeDir(), func(path string, entry fs.DirEntry, err error) error {
 		if len(sources) >= 700 {
 			return fs.SkipAll
@@ -131,6 +142,9 @@ func (f inputForm) matches() []agent.Ref {
 func (m *Model) formKey(key tea.KeyMsg) tea.Cmd {
 	form := &m.form
 	value := key.String()
+	if form.pdfRange.File != "" {
+		return m.pageRangeKey(key)
+	}
 	switch value {
 	case "esc", "ctrl+c":
 		if !m.chapterBusy {
@@ -147,7 +161,7 @@ func (m *Model) formKey(key tea.KeyMsg) tea.Cmd {
 	form.error = ""
 	if form.mode == "chapter" {
 		if value == "enter" {
-			plan, err := workflow.PlanChapter(m.root, m.mainTeX(), form.text)
+			plan, err := workflow.PlanChapterIn(m.root, m.mainTeX(), form.text, m.cfg.Structure == workflow.Chapters)
 			if err != nil {
 				form.error = err.Error()
 			} else {
@@ -163,6 +177,16 @@ func (m *Model) formKey(key tea.KeyMsg) tea.Cmd {
 			return nil
 		}
 		return m.submitAgentForm()
+	}
+	if form.field == 2 && value == "right" {
+		if ref := form.highlightedSource(); isPDFSource(ref) {
+			form.pdfRange = ref
+			form.pages = ""
+			if ref.First > 0 {
+				_, form.pages, _ = strings.Cut(ref.String(), ":")
+			}
+		}
+		return nil
 	}
 	if form.mode == "source" {
 		if value == "enter" && m.addSource() {
@@ -205,6 +229,42 @@ func (m *Model) formKey(key tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
+func (f inputForm) highlightedSource() agent.Ref {
+	matches := f.matches()
+	if len(matches) == 0 {
+		return agent.Ref{}
+	}
+	return matches[min(f.match, len(matches)-1)]
+}
+
+func isPDFSource(ref agent.Ref) bool {
+	return strings.EqualFold(filepath.Ext(ref.File), ".pdf")
+}
+
+func (m *Model) pageRangeKey(key tea.KeyMsg) tea.Cmd {
+	form := &m.form
+	form.error = ""
+	switch key.String() {
+	case "esc", "ctrl+c":
+		form.pdfRange = agent.Ref{}
+	case "enter":
+		ref, err := agent.ParseSource(form.pdfRange.File + ":" + form.pages)
+		if err != nil {
+			form.error = "Inserisci una pagina, per esempio 12, o un intervallo come 12-28."
+			return nil
+		}
+		if m.selectSource(ref, nil) {
+			form.pdfRange = agent.Ref{}
+			if form.mode == "source" {
+				return m.submitAgentForm()
+			}
+		}
+	default:
+		form.pages = appendInput(form.pages, key, 24)
+	}
+	return nil
+}
+
 func (m *Model) sourceInput(key tea.KeyMsg) {
 	form := &m.form
 	switch key.String() {
@@ -240,17 +300,19 @@ func appendInput(value string, key tea.KeyMsg, limit int) string {
 
 func (m *Model) addSource() bool {
 	form := &m.form
-	var ref agent.Ref
-	var err error
-	matches := form.matches()
-	switch {
-	case strings.TrimSpace(form.query) == "" && len(matches) == 0:
-		return false
-	case len(matches) > 0 && (form.query == "" || !slices.ContainsFunc(matches, func(ref agent.Ref) bool { return ref.File == form.query })):
-		ref = matches[min(form.match, len(matches)-1)]
-	default:
-		ref, err = agent.ParseSource(form.query)
+	ref := form.highlightedSource()
+	if ref.File != "" {
+		return m.selectSource(ref, nil)
 	}
+	if strings.TrimSpace(form.query) == "" {
+		return false
+	}
+	ref, err := agent.ParseSource(form.query)
+	return m.selectSource(ref, err)
+}
+
+func (m *Model) selectSource(ref agent.Ref, err error) bool {
+	form := &m.form
 	if err == nil {
 		_, err = workflow.WorkspaceFile(m.root, ref.File)
 	}
@@ -306,6 +368,7 @@ func (m *Model) submitAgentForm() tea.Cmd {
 		}
 		if form.mode == "write" || (form.mode == "followup" && (job.State == agent.Completed || job.State == agent.Review)) {
 			job.ID, job.Decision, job.DecisionWhy, job.Automatic = 0, "", "", false
+			job.Todo = nil
 			job.Buffered, job.BufferedHash, job.Applied = false, "", 0
 			job.Deadline = time.Time{}
 			job.Write = (form.mode == "write" || (form.mode == "followup" && old.Write))
@@ -381,6 +444,19 @@ func (m Model) formTitle() string {
 	}[m.form.mode]
 }
 
+func sourceLabel(ref agent.Ref) string {
+	switch {
+	case !isPDFSource(ref):
+		return ref.String()
+	case ref.First == 0:
+		return ref.File + " · PDF intero"
+	case ref.First == ref.Last:
+		return fmt.Sprintf("%s · pagina %d", ref.File, ref.First)
+	default:
+		return fmt.Sprintf("%s · pagine %d–%d", ref.File, ref.First, ref.Last)
+	}
+}
+
 func (m Model) formRows(width int) []string {
 	f := m.form
 	var rows []string
@@ -391,6 +467,15 @@ func (m Model) formRows(width int) []string {
 		}
 		rows = append(rows, mark)
 		rows = append(rows, foldLine("  "+clean(value), width)...)
+	}
+	if f.pdfRange.File != "" {
+		field(2, "Pagine del PDF", f.pages+"▏")
+		rows = append(rows, foldLine("  "+clean(f.pdfRange.File), width)...)
+		rows = append(rows, "  Una pagina (12) o un intervallo (12-28)", "", "  Invio aggiungi · Esc torna alle fonti")
+		if f.error != "" {
+			rows = append(foldLine(" "+clean(f.error), width), rows...)
+		}
+		return rows
 	}
 	switch f.mode {
 	case "chapter":
@@ -408,11 +493,21 @@ func (m Model) formRows(width int) []string {
 		if f.mode != "source" {
 			field(1, "Richiesta", f.text)
 		}
-		field(2, "Fonti  ·  es. slide.pdf:12-14", f.query)
+		sourceTitle := "Fonti · digita per cercare"
+		if f.field == 2 {
+			if ref := f.highlightedSource(); isPDFSource(ref) {
+				if ref.First == 0 {
+					sourceTitle = "Fonti · Invio PDF intero · → Scegli pagine"
+				} else {
+					sourceTitle = "Fonti · Invio aggiungi · → Cambia pagine"
+				}
+			}
+		}
+		field(2, sourceTitle, f.query)
 		if len(f.selected) > 0 {
 			var names []string
 			for _, reference := range f.selected {
-				names = append(names, reference.String())
+				names = append(names, clean(sourceLabel(reference)))
 			}
 			rows = append(rows, foldLine("  ✓ "+strings.Join(names, " · "), width)...)
 		}
@@ -420,9 +515,9 @@ func (m Model) formRows(width int) []string {
 			matches := f.matches()
 			start := max(0, min(f.match-1, len(matches)-3))
 			for index := start; index < min(start+3, len(matches)); index++ {
-				name := "    " + clean(matches[index].String())
+				name := "    " + clean(sourceLabel(matches[index]))
 				if index == f.match {
-					name = accent.Render("  › " + clean(matches[index].String()))
+					name = accent.Render("  › " + clean(sourceLabel(matches[index])))
 				}
 				rows = append(rows, name)
 			}

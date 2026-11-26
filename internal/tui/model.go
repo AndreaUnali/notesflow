@@ -77,17 +77,19 @@ type Model struct {
 	summarizing, showSummary bool
 	summaryOffset            int
 
-	editor                    *editor.Editor
-	editorBusy                bool
-	editorFrame               editor.Frame
-	editorWidth, editorHeight int
-	lastFile, editorCourse    string
-	quitting                  bool
-	positionBusy, chapterBusy bool
-	session                   *network.Session
-	choice                    workspaceChoice
-	form                      inputForm
-	agents                    agentUI
+	editor                       *editor.Editor
+	editorBusy                   bool
+	editorFrame                  editor.Frame
+	editorWidth, editorHeight    int
+	lastFile, editorCourse       string
+	quitting, returnToLauncher   bool
+	savingNotes                  bool
+	unsavedWarning, checkingSave bool
+	positionBusy, chapterBusy    bool
+	session                      *network.Session
+	choice                       workspaceChoice
+	form                         inputForm
+	agents                       agentUI
 
 	pdf                pdfState
 	pdfPage, pdfOffset int
@@ -153,6 +155,18 @@ type quitCheck struct {
 	position positionResult
 }
 
+type notesSaved struct {
+	instance *editor.Editor
+	err      error
+}
+
+type saveWarningChecked struct {
+	instance *editor.Editor
+	clean    bool
+}
+
+const unsavedNotesWarning = "Modifiche non salvate · clicca Salva in alto"
+
 func refresh() tea.Cmd {
 	return tea.Tick(850*time.Millisecond, func(t time.Time) tea.Msg { return tick(t) })
 }
@@ -204,7 +218,8 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 		if m.tab == editorTab {
 			position = m.capturePosition()
 		}
-		return m, tea.Batch(refresh(), cmd, agentCmd, position)
+		saveCheck := m.checkSaveWarning()
+		return m, tea.Batch(refresh(), cmd, agentCmd, position, saveCheck)
 	case tea.WindowSizeMsg:
 		m.width, m.height = v.Width, v.Height
 		m.resizeEditor()
@@ -254,6 +269,7 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 		if v.closed {
 			m.editor, m.editorFrame = nil, editor.Frame{}
 			m.editorWidth, m.editorHeight = 0, 0
+			m.clearSaveWarning("Sessione di scrittura chiusa")
 			if m.tab == editorTab && !m.editorBusy {
 				m.message = "Sessione di scrittura chiusa · Invio per riaprire"
 			}
@@ -288,17 +304,37 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, cmd
 	case appliedAgent:
 		m.appliedAgent(v)
+		if job, ok := m.agents.book.Lookup(v.id); ok && job.Todo != nil && job.State == agent.Completed && !job.Buffered {
+			return m, m.compileFile(job.Todo.MainTeX)
+		}
 		cmd := m.advanceAgent(time.Now())
 		return m, cmd
+	case notesSaved:
+		m.savingNotes = false
+		if v.instance == m.editor {
+			if v.err != nil {
+				m.message = "Salvataggio fallito · " + strings.SplitN(v.err.Error(), "\n", 2)[0]
+			} else {
+				m.unsavedWarning = false
+				m.message = "Appunti salvati"
+			}
+		}
+	case saveWarningChecked:
+		m.checkingSave = false
+		if v.instance == m.editor && v.clean && !m.savingNotes && !m.quitting {
+			m.clearSaveWarning("Appunti salvati")
+		}
 	case quitCheck:
 		m.quitting = false
 		m.savePosition(v.position)
 		if v.err != nil {
+			m.returnToLauncher = false
 			m.focusNavigation()
 			m.message = "Uscita sospesa · Neovim: " + v.err.Error() + " · q Riprova"
 		} else if v.unsaved {
+			m.returnToLauncher = false
 			m.focusNavigation()
-			m.message = "Modifiche non salvate · 2 Scrittura · :wall salva · Shift+Tab poi q"
+			m.unsavedWarning, m.message = true, unsavedNotesWarning
 		} else {
 			return m, tea.Quit
 		}
@@ -340,7 +376,7 @@ func (m Model) key(key tea.KeyMsg) (Model, tea.Cmd) {
 	}
 	if !key.Paste && (m.tab != editorTab || m.focus != mainFocus) && !m.graphSearch &&
 		(s == "q" || s == "ctrl+c") {
-		cmd := m.quit()
+		cmd := m.quit(s == "q")
 		return m, cmd
 	}
 	if !key.Paste && m.focus == mainFocus && m.tab != editorTab && !m.graphSearch {
@@ -486,6 +522,9 @@ func (m *Model) navigate(key string) tea.Cmd {
 		return m.setTab(m.navTab)
 	case "tab", "esc":
 		m.commandMode = false
+	case "s":
+		m.commandMode = false
+		return m.saveNotes()
 	default:
 		if cmd, ok := m.command(key); ok {
 			m.commandMode = false
@@ -541,7 +580,7 @@ func (m *Model) command(key string) (tea.Cmd, bool) {
 		m.nextCourse()
 		return tea.Batch(position, m.probePDF()), true
 	case "q":
-		return m.quit(), true
+		return m.quit(true), true
 	case "a":
 		return m.setTab(apiTab), true
 	}
@@ -645,8 +684,12 @@ func (m *Model) activate() tea.Cmd {
 		}
 		return nil
 	}
-	if m.tab == homeTab && m.cursor < int(homeActionCount) {
-		switch homeAction(m.cursor) {
+	if m.tab == homeTab && m.cursor < m.homeActions() {
+		action := homeAction(m.cursor)
+		if action == createChapter && m.cfg.Structure == workflow.SingleFile {
+			action = delegateNotes
+		}
+		switch action {
 		case resumeNotes:
 			return m.setTab(editorTab)
 		case createChapter:
@@ -688,6 +731,7 @@ func (m *Model) openEditorAt(target network.Position) tea.Cmd {
 	width, height := m.editorSize()
 	m.editorWidth, m.editorHeight = width, height
 	current, ctx, root, course := m.editor, m.ctx, m.root, m.course
+	colors := palette.Current()
 	return func() tea.Msg {
 		var path string
 		var err error
@@ -700,7 +744,7 @@ func (m *Model) openEditorAt(target network.Position) tea.Cmd {
 			}
 		}
 		if e == nil {
-			e, err = editor.Start(ctx, root, width, height)
+			e, err = editor.Start(ctx, root, width, height, colors)
 			if err != nil {
 				return opened{err: err}
 			}
@@ -723,11 +767,12 @@ func (m *Model) resizeEditor() {
 	}
 }
 
-func (m *Model) quit() tea.Cmd {
-	if m.quitting {
+func (m *Model) quit(returnToLauncher bool) tea.Cmd {
+	if m.quitting || m.savingNotes {
 		return nil
 	}
 	m.quitting = true
+	m.returnToLauncher = returnToLauncher
 	if m.editor == nil {
 		return tea.Quit
 	}
@@ -742,6 +787,43 @@ func (m *Model) quit() tea.Cmd {
 		}
 		return quitCheck{unsaved: state.Unsaved, err: err, position: positionResult{editor: e, course: course, pos: state.Position}}
 	}
+}
+
+func (m *Model) saveNotes() tea.Cmd {
+	if m.savingNotes || m.quitting || m.editor == nil {
+		return nil
+	}
+	m.savingNotes, m.message = true, "Salvataggio degli appunti…"
+	e, ctx := m.editor, m.ctx
+	return func() tea.Msg { return notesSaved{instance: e, err: e.SaveAll(ctx)} }
+}
+
+func (m *Model) checkSaveWarning() tea.Cmd {
+	if !m.unsavedWarning || m.editor == nil || m.checkingSave || m.savingNotes || m.quitting {
+		return nil
+	}
+	m.checkingSave = true
+	e, ctx := m.editor, m.ctx
+	return func() tea.Msg {
+		state, err := e.ExitState(ctx)
+		return saveWarningChecked{instance: e, clean: err == nil && !state.Unsaved}
+	}
+}
+
+func (m *Model) clearSaveWarning(message string) {
+	m.unsavedWarning = false
+	if m.message == unsavedNotesWarning {
+		m.message = message
+	}
+}
+
+func (m Model) ReturnToLauncher() bool { return m.returnToLauncher }
+
+func (m Model) EditorDone() <-chan struct{} {
+	if m.editor == nil {
+		return nil
+	}
+	return m.editor.Done()
 }
 
 func (m Model) isCourseRoot() bool {
@@ -826,11 +908,13 @@ func (m Model) tasks(filtered bool) []parser.Task {
 		}
 	}
 	for _, job := range m.agentTasks() {
-		if !(job.State == agent.Review && job.Automatic) && !(job.State == agent.Completed && job.Buffered) {
+		needsReview := job.State == agent.Review && job.Automatic ||
+			job.Todo != nil && (job.State == agent.Review || job.State == agent.Failed)
+		if !needsReview && !(job.State == agent.Completed && job.Buffered) {
 			continue
 		}
 		for _, task := range agent.Tasks(job) {
-			if job.State == agent.Review && task.Kind != parser.MaintenanceTask {
+			if needsReview && task.Kind != parser.MaintenanceTask {
 				continue
 			}
 			if matches(task) && !slices.ContainsFunc(tasks, func(item parser.Task) bool {

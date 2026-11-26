@@ -72,6 +72,10 @@ func Open(ctx context.Context, target, app string) error {
 }
 
 func Compile(ctx context.Context, root, file, engine string) (string, error) {
+	return CompileIn(ctx, root, file, engine, "")
+}
+
+func CompileIn(ctx context.Context, root, file, engine, buildDir string) (string, error) {
 	absolute, err := WorkspaceFile(root, file)
 	if err != nil {
 		return "", err
@@ -80,25 +84,57 @@ func Compile(ctx context.Context, root, file, engine string) (string, error) {
 		return "", errors.New("seleziona un file .tex")
 	}
 	input := "." + string(os.PathSeparator) + filepath.Base(absolute)
+	outputDir := filepath.Dir(absolute)
+	var outputArgs []string
+	if buildDir != "" {
+		var unlock func()
+		outputDir, unlock, err = prepareBuildDir(root, buildDir)
+		if err != nil {
+			return "", err
+		}
+		defer unlock()
+		if chapters, err := os.Stat(filepath.Join(filepath.Dir(absolute), "capitoli")); err == nil && chapters.IsDir() {
+			if err := os.Mkdir(filepath.Join(outputDir, "capitoli"), 0755); err != nil && !errors.Is(err, os.ErrExist) {
+				return "", err
+			}
+		}
+		switch engine {
+		case "latexmk":
+			outputArgs = []string{"-outdir=" + outputDir}
+		case "pdflatex", "xelatex", "lualatex":
+			outputArgs = []string{"-output-directory=" + outputDir}
+		case "tectonic":
+			outputArgs = []string{"--outdir", outputDir}
+		}
+	}
 	var args []string
 	switch engine {
 	case "latexmk":
-		args = []string{"-pdf", "-interaction=nonstopmode", "-halt-on-error", "-synctex=1", input}
+		args = []string{"-pdf", "-interaction=nonstopmode", "-halt-on-error", "-synctex=1"}
 	case "pdflatex", "xelatex", "lualatex":
-		args = []string{"-interaction=nonstopmode", "-halt-on-error", "-synctex=1", input}
+		args = []string{"-interaction=nonstopmode", "-halt-on-error", "-synctex=1"}
+		if buildDir != "" {
+			args = append(args, "-recorder")
+		}
 	case "tectonic":
-		args = []string{"--synctex", input}
+		args = []string{"--synctex"}
 	default:
 		return "", errors.New("motore LaTeX non supportato")
 	}
-	cmd := exec.CommandContext(ctx, engine, args...)
+	cmd := exec.CommandContext(ctx, engine, append(append(args, outputArgs...), input)...)
 	cmd.Dir = filepath.Dir(absolute)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("%s: %w\n%s", engine, err, output)
 	}
 	output := strings.TrimSuffix(absolute, filepath.Ext(absolute)) + ".pdf"
-	if _, err := os.Stat(output); err != nil {
-		return "", fmt.Errorf("PDF atteso in %s: %w", output, err)
+	built := filepath.Join(outputDir, filepath.Base(output))
+	if _, err := os.Stat(built); err != nil {
+		return "", fmt.Errorf("PDF atteso in %s: %w", built, err)
+	}
+	if built != output {
+		if err := publishPDF(built, output); err != nil {
+			return "", err
+		}
 	}
 	return output, nil
 }

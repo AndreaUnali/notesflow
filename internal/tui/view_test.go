@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -8,7 +9,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/AndreaUnali/notesflow/internal/agent"
 	"github.com/AndreaUnali/notesflow/internal/config"
+	"github.com/AndreaUnali/notesflow/internal/editor"
 	"github.com/AndreaUnali/notesflow/internal/graph"
 	"github.com/AndreaUnali/notesflow/internal/parser"
 	"github.com/AndreaUnali/notesflow/internal/providers"
@@ -43,7 +46,7 @@ func TestCourseHomeKeepsPreviewRoadmapAndShortcutsInFrame(t *testing.T) {
 	}
 	model.width, model.height = 120, 42
 	view := ansi.Strip(model.View())
-	for _, marker := range []string{"1 Home", "2 Scrittura", "3 Grafo", "Riprendi", "Nuovo capitolo", "Delega", "Capitoli", "Shift+Tab → q Esci", "TODO · 2", "Anteprima PDF", "Roadmap · 1/2", "─▶"} {
+	for _, marker := range []string{"1 Home", "2 Scrittura", "3 Grafo", "Riprendi", "Nuovo capitolo", "Delega", "Capitoli", "Shift+Tab → q Progetti", "TODO · 2", "Anteprima PDF", "Roadmap · 1/2", "─▶"} {
 		if !strings.Contains(view, marker) {
 			t.Errorf("view does not contain %q", marker)
 		}
@@ -212,13 +215,34 @@ func TestShiftTabAndQuitAreAvailableAcrossPanes(t *testing.T) {
 			}
 			model, _ = model.key(event)
 			model, cmd := model.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
-			if cmd == nil || !model.quitting {
-				t.Fatal("q should request exit from global navigation")
+			if cmd == nil || !model.quitting || !model.ReturnToLauncher() {
+				t.Fatal("q should return to the launcher from global navigation")
 			}
 			if _, ok := cmd().(tea.QuitMsg); !ok {
 				t.Fatal("a workspace without an editor should exit")
 			}
 		})
+	}
+}
+
+func TestUnsavedBuffersCancelReturningToLauncher(t *testing.T) {
+	model := Model{quitting: true, returnToLauncher: true}
+	result, cmd := model.update(quitCheck{unsaved: true})
+	if result.ReturnToLauncher() || result.quitting || cmd != nil || !strings.Contains(result.message, "Modifiche non salvate") {
+		t.Fatal("unsaved buffers did not keep the project open")
+	}
+}
+
+func TestSaveButtonWorksFromHome(t *testing.T) {
+	model := Model{width: 70, height: 30, editor: &editor.Editor{}, tab: homeTab}
+	_, agent := model.agentButton()
+	label, button := model.saveButton(agent.x)
+	if !strings.Contains(label, "Salva") {
+		t.Fatal("Save is missing from the Home header")
+	}
+	cmd := model.mouse(tea.MouseEvent{X: button.x + 1, Y: button.y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	if cmd == nil || !model.savingNotes || model.tab != homeTab {
+		t.Fatal("the button did not start a save in Home")
 	}
 }
 
@@ -235,5 +259,43 @@ func TestNavigationPreservesDraftWhenSwitchingTabs(t *testing.T) {
 	model, _ = model.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("1")})
 	if !model.formOpen() || model.form.text != "Spiega i container" || model.form.field != 1 {
 		t.Fatal("returning from Activity should restore the draft")
+	}
+}
+
+func TestDelegationAddsWholePDFAndOffersOptionalPageRange(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pdf := agent.Ref{File: "pacchetto.pdf"}
+	other := agent.Ref{File: "secondo pacchetto.pdf"}
+	for _, ref := range []agent.Ref{pdf, other} {
+		if err := os.WriteFile(filepath.Join(root, ref.File), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := Model{root: root, form: inputForm{mode: "delegate", field: 2, choices: []agent.Ref{pdf, other}}}
+	m.formKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if len(m.form.selected) != 1 || m.form.selected[0] != pdf {
+		t.Fatalf("enter must add the whole PDF: %+v", m.form.selected)
+	}
+	view := ansi.Strip(strings.Join(m.formRows(80), "\n"))
+	if !strings.Contains(view, "pacchetto.pdf · PDF intero") || !strings.Contains(view, "→ Scegli pagine") {
+		t.Fatalf("missing source instructions: %s", view)
+	}
+	m.formKey(tea.KeyMsg{Type: tea.KeyRight})
+	if m.form.pdfRange != other || !strings.Contains(strings.Join(m.formRows(80), "\n"), "12-28") {
+		t.Fatal("right arrow must show a page range example")
+	}
+	m.formKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.form.mode != "delegate" || m.form.pdfRange.File != "" {
+		t.Fatal("escape must reopen the source list")
+	}
+	m.formKey(tea.KeyMsg{Type: tea.KeyRight})
+	m.formKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("12-40"), Paste: true})
+	m.formKey(tea.KeyMsg{Type: tea.KeyEnter})
+	want := agent.Ref{File: other.File, First: 12, Last: 40}
+	if len(m.form.selected) != 2 || m.form.selected[1] != want || m.form.pdfRange.File != "" {
+		t.Fatalf("enter must add the selected range: %+v", m.form)
 	}
 }

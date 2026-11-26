@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/AndreaUnali/notesflow/internal/network"
@@ -21,6 +22,23 @@ func TestLauncherCentersEmptyFirstRunAndKeepsFolderAction(t *testing.T) {
 	if math.Abs(float64(layout.search.x*2+layout.search.cols-model.width)) > 1 ||
 		layout.search.y < model.height/3 || layout.search.y > 2*model.height/3 {
 		t.Fatalf("search must be centered at fullscreen size, got %+v", layout.search)
+	}
+}
+
+func TestLauncherQuitKeepsQAvailableInSearch(t *testing.T) {
+	event := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")}
+	launcher := launcher{}
+	_, cmd := launcher.update(event)
+	if cmd == nil {
+		t.Fatal("q should leave the launcher")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatal("q should quit the app")
+	}
+	launcher.searchFocused = true
+	updated, cmd := launcher.update(event)
+	if cmd != nil || updated.query != "q" {
+		t.Fatal("search should accept q as a character")
 	}
 }
 

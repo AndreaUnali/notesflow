@@ -3,7 +3,10 @@
 const $ = (id) => document.getElementById(id);
 const canvas = $("canvas");
 const context = canvas.getContext("2d");
-const palette = ["#00F5D4", "#FF2A85", "#9B5DE5", "#FEE440"];
+const styles = getComputedStyle(document.documentElement);
+const themeColor = (name) => styles.getPropertyValue("--" + name).trim();
+const palette = ["cyan", "magenta", "violet", "yellow"].map(themeColor);
+const graphColors = {explicit: palette[0], semantic: palette[1], text: themeColor("text"), muted: themeColor("muted")};
 const kinds = {hierarchy: "Gerarchia", semantic: "Semantico", ref: "LaTeX · ref",
   eqref: "LaTeX · eqref", input: "LaTeX · input", include: "LaTeX · include"};
 const filters = new Map([...document.querySelectorAll("[data-kind]")].map(input => [input.dataset.kind, input]));
@@ -240,7 +243,7 @@ function draw(time) {
     context.globalAlpha = related ? (semantic ? .44 + pulse * .34 : hierarchy ? .42 : .75) : .08;
     context.setLineDash(semantic ? [5, 5] : []);
     context.lineDashOffset = semantic && !reducedMotion.matches ? -time / 100 : 0;
-    context.strokeStyle = semantic ? "#FF73BA" : hierarchy ? "#78899F" : "#64F8E3";
+    context.strokeStyle = semantic ? graphColors.semantic : hierarchy ? graphColors.muted : graphColors.explicit;
     context.lineWidth = semantic ? .85 + edge.weight * 2.0 : hierarchy ? .85 : 1.55;
     context.beginPath();
     context.moveTo(a.x, a.y);
@@ -264,7 +267,7 @@ function draw(time) {
     context.fill();
     context.shadowBlur = 0;
     if (highlighted || (labels && matches && view.scale > .36 && (!focus || visible(node.id)))) {
-      context.fillStyle = node.kind === "file" || highlighted ? "#F0F6FF" : "#BBC8DB";
+      context.fillStyle = node.kind === "file" || highlighted ? graphColors.text : graphColors.muted;
       context.fillText(node.title.length > 34 ? node.title.slice(0, 32) + "…" : node.title,
         node.x + node.radius + 5, node.y);
     }

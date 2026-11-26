@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -45,7 +44,7 @@ func complete(ctx context.Context, p config.Profile, instructions, data string) 
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if key := os.Getenv(p.APIKeyEnv); key != "" {
+	if key := p.APIKey(); key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 	res, err := httpClient.Do(req)

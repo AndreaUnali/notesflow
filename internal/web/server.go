@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/AndreaUnali/notesflow/internal/graph"
+	"github.com/AndreaUnali/notesflow/internal/palette"
 	"github.com/AndreaUnali/notesflow/internal/parser"
 )
 
@@ -29,7 +30,7 @@ type Server struct {
 	URL      string
 }
 
-func Listen(ctx context.Context, port int, store *graph.Store, edit func(context.Context, parser.Node) error) (*Server, error) {
+func Listen(ctx context.Context, port int, store *graph.Store, colors palette.Colors, edit func(context.Context, parser.Node) error) (*Server, error) {
 	assets, err := fs.Sub(embedded, "assets")
 	if err != nil {
 		return nil, err
@@ -42,6 +43,11 @@ func Listen(ctx context.Context, port int, store *graph.Store, edit func(context
 	origin := "http://" + host
 	mux := http.NewServeMux()
 	mux.Handle("GET /", http.FileServer(http.FS(assets)))
+	mux.HandleFunc("GET /theme.css", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/css; charset=utf-8")
+		fmt.Fprintf(w, ":root{--background:%s;--surface:%s;--border:%s;--text:%s;--muted:%s;--cyan:%s;--magenta:%s;--violet:%s;--yellow:%s;--selection:%s}",
+			colors.Background, colors.Surface, colors.Line, colors.Text, colors.Muted, colors.Cyan, colors.Pink, colors.Purple, colors.Yellow, colors.Selection)
+	})
 	mux.HandleFunc("GET /api/graph", func(w http.ResponseWriter, r *http.Request) {
 		snapshot, _ := store.Snapshot()
 		w.Header().Set("Content-Type", "application/json")

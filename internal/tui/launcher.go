@@ -46,6 +46,8 @@ type launcher struct {
 	t, held       float64
 	hover         int
 	pathOnly      bool
+	searchFocused bool
+	action        LaunchAction
 	searching     bool
 }
 
@@ -62,7 +64,15 @@ type foundNetworks struct {
 	done    bool
 }
 
-func ChooseNetwork(ctx context.Context, surface *terminal.Surface) (string, error) {
+type LaunchAction int
+
+const (
+	LaunchOpen LaunchAction = iota
+	LaunchNew
+	LaunchSettings
+)
+
+func ChooseNetwork(ctx context.Context, surface *terminal.Surface) (string, LaunchAction, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	entries, err := network.List()
@@ -74,9 +84,10 @@ func ChooseNetwork(ctx context.Context, surface *terminal.Surface) (string, erro
 	m.prepareGraphs()
 	result, err := tea.NewProgram(m, tea.WithContext(ctx), tea.WithAltScreen(), tea.WithOutput(surface), tea.WithMouseAllMotion(), tea.WithFPS(45)).Run()
 	if err != nil {
-		return "", err
+		return "", LaunchOpen, err
 	}
-	return result.(launcher).chosen, nil
+	chosen := result.(launcher)
+	return chosen.chosen, chosen.action, nil
 }
 
 func (m launcher) Init() tea.Cmd {
@@ -242,6 +253,18 @@ func (m launcher) update(msg tea.Msg) (launcher, tea.Cmd) {
 		event := tea.MouseEvent(v)
 		click := event.Button == tea.MouseButtonLeft && event.Action == tea.MouseActionPress
 		layout := m.layout()
+		if click && layout.search.contains(event.X, event.Y) {
+			m.searchFocused = true
+			return m, nil
+		}
+		if click && !m.pathOnly && event.Y == layout.action.y+1 &&
+			event.X >= layout.action.x && event.X < layout.action.x+layout.action.cols {
+			m.action = LaunchNew
+			if event.X >= layout.action.x+layout.action.cols/2 {
+				m.action = LaunchSettings
+			}
+			return m, tea.Quit
+		}
 		if click && layout.action.contains(event.X, event.Y) {
 			if m.pathOnly && m.query != "" {
 				cmd := m.pick(m.query)
@@ -281,6 +304,9 @@ func (m launcher) update(msg tea.Msg) (launcher, tea.Cmd) {
 		}
 	case tea.KeyMsg:
 		key := v.String()
+		if !v.Paste && key == "q" && m.query == "" && !m.pathOnly && !m.searchFocused {
+			return m, tea.Quit
+		}
 		if v.Paste {
 			m.query += strings.ReplaceAll(strings.ReplaceAll(string(v.Runes), "\r", ""), "\n", "")
 			m.cursor, m.notice = 0, ""
@@ -295,6 +321,12 @@ func (m launcher) update(msg tea.Msg) (launcher, tea.Cmd) {
 			return m, tea.Quit
 		case "ctrl+o":
 			m.openFolder()
+		case "ctrl+n":
+			m.action = LaunchNew
+			return m, tea.Quit
+		case "f2":
+			m.action = LaunchSettings
+			return m, tea.Quit
 		case "up":
 			m.cursor = max(0, m.cursor-1)
 		case "down":
@@ -552,9 +584,16 @@ func (m launcher) renderText(results []network.Recent) string {
 		action = muted.Render(action)
 	}
 	center(l.action.y, action)
-	hint := "↑↓ Select  ·  Enter Open  ·  Esc Quit"
+	if !m.pathOnly {
+		half := l.action.cols / 2
+		put(l.action.y+1, l.action.x, half, centered(accent.Render("Nuovo progetto  Ctrl+N"), half))
+		put(l.action.y+1, l.action.x+half, l.action.cols-half, centered(muted.Render("Impostazioni  F2"), l.action.cols-half))
+	}
+	hint := "↑↓ Seleziona  ·  Invio Apri  ·  q Esci"
 	if m.pathOnly {
-		hint = "Esc Back"
+		hint = "Esc Torna"
+	} else if m.query != "" || m.searchFocused {
+		hint = "↑↓ Seleziona  ·  Invio Apri  ·  Esc Esci"
 	}
 	center(l.help, muted.Render(hint))
 	for i, box := range m.graphBoxes(l) {

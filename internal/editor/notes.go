@@ -2,6 +2,7 @@ package editor
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/AndreaUnali/notesflow/internal/network"
@@ -42,6 +43,31 @@ return {
 }`, &state)
 	})
 	return state, err
+}
+
+func (e *Editor) SaveAll(ctx context.Context) error {
+	var message string
+	err := e.request(ctx, func(v *nvim.Nvim) error {
+		mode, err := v.Mode()
+		if err != nil {
+			return err
+		}
+		if mode.Blocking {
+			if _, err := v.Input("<Esc>"); err != nil {
+				return err
+			}
+		}
+		return v.ExecLua(`local ok, message = pcall(vim.cmd, 'silent wall')
+if not ok then return tostring(message) end
+if #vim.fn.getbufinfo({bufmodified = 1}) > 0 then
+  return 'Restano file modificati in Neovim.'
+end
+return ''`, &message)
+	})
+	if err == nil && message != "" {
+		return errors.New(message)
+	}
+	return err
 }
 
 func (e *Editor) OpenAt(ctx context.Context, file string, pos network.Position) error {

@@ -14,6 +14,7 @@ import (
 	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
 
+	"github.com/AndreaUnali/notesflow/internal/palette"
 	"github.com/AndreaUnali/notesflow/internal/parser"
 	"github.com/AndreaUnali/notesflow/internal/terminal"
 )
@@ -118,8 +119,9 @@ var graphFont = sync.OnceValue(func() *opentype.Font {
 })
 
 var (
-	surfaceRGB = hexColor(0x090B10)
-	courseRGB  = []color.RGBA{hexColor(0x00F5D4), hexColor(0xFF2A85), hexColor(0x9B5DE5), hexColor(0xFEE440)}
+	surfaceRGB = rgb(palette.Background)
+	textRGB    = rgb(palette.Text)
+	courseRGB  = []color.RGBA{rgb(palette.Cyan), rgb(palette.Pink), rgb(palette.Purple), rgb(palette.Yellow)}
 )
 
 func hexColor(value uint32) color.RGBA {
@@ -127,6 +129,7 @@ func hexColor(value uint32) color.RGBA {
 }
 
 func renderGraph(g terminalGraph, key graphRenderKey) renderedGraph {
+	border, secondary := rgb(palette.Line), rgb(palette.Muted)
 	// Render at pixel resolution, independently of the terminal character grid.
 	pixelsPerRow := max(7, min(22, int(min(850/float64(key.rows), 1200/(float64(key.cols)*key.ratio)))))
 	w, h := max(1, int(float64(key.cols*pixelsPerRow)*key.ratio)), key.rows*pixelsPerRow
@@ -136,7 +139,7 @@ func renderGraph(g terminalGraph, key graphRenderKey) renderedGraph {
 		spacing := max(17, pixelsPerRow+4)
 		for y := spacing / 2; y < h; y += spacing {
 			for x := spacing / 2; x < w; x += spacing {
-				img.SetRGBA(x, y, hexColor(0x233047))
+				img.SetRGBA(x, y, border)
 			}
 		}
 	}
@@ -175,12 +178,12 @@ func renderGraph(g terminalGraph, key graphRenderKey) renderedGraph {
 		} else if edge.Source == key.selected || edge.Target == key.selected {
 			strength = .96
 		}
-		shade, stroke, dashed := hexColor(0x60ECDA), 1.05, false
+		shade, stroke, dashed := courseRGB[0], 1.05, false
 		switch kind {
 		case 2:
-			shade, stroke, dashed = hexColor(0xFF6FB7), .8+1.25*edge.Weight, true
+			shade, stroke, dashed = courseRGB[1], .8+1.25*edge.Weight, true
 		case 3:
-			shade, stroke = hexColor(0x71839C), .70
+			shade, stroke = secondary, .70
 		}
 		line(img, a, b, shade, stroke, strength, dashed)
 	}
@@ -245,7 +248,7 @@ func renderGraph(g terminalGraph, key graphRenderKey) renderedGraph {
 		}
 		if node.ID == key.selected || node.ID == focus {
 			glow(img, p, c, r+2, .95)
-			dot(img, p, r+2.7, hexColor(0xECF9FF), .9)
+			dot(img, p, r+2.7, textRGB, .9)
 			dot(img, p, r+1.4, surfaceRGB, 1)
 		}
 		alpha := .26
@@ -267,9 +270,9 @@ func renderGraph(g terminalGraph, key graphRenderKey) renderedGraph {
 				continue
 			}
 			taken = append(taken, bounds)
-			shade := hexColor(0xBBC9DB)
+			shade := secondary
 			if node.ID == key.selected || node.ID == focus {
-				shade = hexColor(0xF1FAFF)
+				shade = textRGB
 			}
 			labels = append(labels, label{caption, fixed.P(at.X, at.Y), shade})
 			break

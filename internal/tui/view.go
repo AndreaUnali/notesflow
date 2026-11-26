@@ -215,7 +215,8 @@ func (m Model) tabs() []tabControl {
 
 func (m Model) header(l layout) []string {
 	status, button := m.agentButton()
-	lines := []string{fit(accent.Render(" ◉  NOTESFLOW")+"  /  "+clean(m.scopeName()), button.x) + status}
+	save, saveRect := m.saveButton(button.x)
+	lines := []string{fit(accent.Render(" ◉  NOTESFLOW")+"  /  "+clean(m.scopeName()), saveRect.x) + save + status}
 	tabRows := 1
 	if m.width < 57 {
 		tabRows = 2
@@ -275,30 +276,50 @@ func (m Model) agentButton() (string, cellRect) {
 	return style.Background(lipgloss.Color(palette.Surface)).Render(label), cellRect{m.width - width, 0, width, 1}
 }
 
+func (m Model) saveButton(right int) (string, cellRect) {
+	if m.editor == nil {
+		return "", cellRect{x: right}
+	}
+	label, style := " Salva ", selectedStyle
+	if m.savingNotes {
+		label, style = " Salvo… ", muted.Background(lipgloss.Color(palette.Surface))
+	}
+	width := lipgloss.Width(label)
+	return style.Render(label) + " ", cellRect{max(0, right-width-1), 0, width, 1}
+}
+
+const projectsShortcut = "q Progetti"
+
 func (m Model) navigationHint() string {
 	if m.commandMode {
-		return " q Esci · 1–5 Schede · ←/→ · Invio · Tab Torna"
+		hint := " " + projectsShortcut
+		if m.editor != nil {
+			hint += " · s Salva"
+		}
+		return hint + " · 1–5 Schede · ←/→ · Invio · Tab Torna"
 	}
-	return " Shift+Tab → q Esci · 1–5 Schede"
+	return " Shift+Tab → " + projectsShortcut + " · 1–5 Schede"
 }
 
 func (m Model) quitButton(l layout) cellRect {
 	hint := m.navigationHint()
-	before, _, _ := strings.Cut(hint, "q Esci")
+	before, _, _ := strings.Cut(hint, projectsShortcut)
 	x := lipgloss.Width(before)
 	row := l.header - 1
 	if m.width < 75 {
 		row--
 	}
-	return cellRect{x, row, min(6, max(0, m.width-x)), 1}
+	return cellRect{x, row, min(lipgloss.Width(projectsShortcut), max(0, m.width-x)), 1}
 }
 
 func background(text string) string {
 	if os.Getenv("NO_COLOR") != "" {
 		return text
 	}
-	const dark = "\x1b[48;2;9;11;16m"
-	return dark + strings.ReplaceAll(text, "\x1b[0m", "\x1b[0m"+dark) + "\x1b[0m"
+	shade := surfaceRGB
+	fg := textRGB
+	fill := fmt.Sprintf("\x1b[38;2;%d;%d;%d;48;2;%d;%d;%dm", fg.R, fg.G, fg.B, shade.R, shade.G, shade.B)
+	return fill + strings.ReplaceAll(text, "\x1b[0m", "\x1b[0m"+fill) + "\x1b[0m"
 }
 
 func editorMode(mode string) string {

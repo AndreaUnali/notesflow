@@ -42,11 +42,11 @@ func TestSectionDraftMergesOutsideEditsAndRecordsDecisions(t *testing.T) {
 }
 
 func TestParseSourceBoundsPDFPages(t *testing.T) {
-	ref, err := ParseSource("fonti/pacchetto 3.pdf:12-14")
-	if err != nil || ref.File != "fonti/pacchetto 3.pdf" || ref.First != 12 || ref.Last != 14 {
+	ref, err := ParseSource("fonti/pacchetto 3.pdf:12-82")
+	if err != nil || ref.File != "fonti/pacchetto 3.pdf" || ref.First != 12 || ref.Last != 82 {
 		t.Fatalf("incorrect source %v (%v)", ref, err)
 	}
-	for _, input := range []string{"file.pdf:0", "file.pdf:90-2", "file.pdf:1-99", "file.png", "/file.pdf"} {
+	for _, input := range []string{"file.pdf:0", "file.pdf:90-2", "file.png", "/file.pdf"} {
 		if _, err := ParseSource(input); err == nil {
 			t.Errorf("accepted %s", input)
 		}

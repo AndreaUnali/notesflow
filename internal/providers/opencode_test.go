@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/AndreaUnali/notesflow/internal/agent"
 )
 
 func TestOpenCodeErrorIncludesActionWithoutRawOutput(t *testing.T) {
@@ -58,6 +60,34 @@ func TestOpenCodeReturnsTextAndRespondsToAnEarlierDeadline(t *testing.T) {
 	defer cancel()
 	if _, err := openCode(ctx, "", "test"); err == nil || !strings.Contains(err.Error(), "limite") {
 		t.Fatalf("expected a diagnostic timeout, got %v", err)
+	}
+}
+
+func TestGuideRecoversValidDraftAfterOpenCodeRetry(t *testing.T) {
+	const recovered = `{"type":"text","part":{"text":"{\"summary\":\"Bozza pronta\",\"replacement\":\"Contenuto\"}"}}`
+	const failure = `{"type":"error","error":{"data":{"statusCode":503}}}`
+	const start = `{"type":"step_start"}`
+	for _, tc := range []struct {
+		name   string
+		events []string
+		ok     bool
+	}{
+		{"valid retry", []string{`{"type":"text","part":{"text":"incomplete"}}`, failure, start, recovered}, true},
+		{"invalid retry", []string{failure, start, `{"type":"text","part":{"text":"incomplete"}}`}, false},
+		{"write without a draft", []string{failure, start, `{"type":"text","part":{"text":"{\"summary\":\"Bozza pronta\"}"}}`}, false},
+		{"failure after draft", []string{failure, start, recovered, failure}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeOpenCode(t, "printf '%s\\n' '"+strings.Join(tc.events, "' '")+"'; exit 1")
+			draft, err := (&Manager{}).Guide(t.Context(), agent.Request{Write: true})
+			if tc.ok {
+				if err != nil || draft.Text != "Contenuto" {
+					t.Fatalf("draft %q, error %v", draft.Text, err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), "HTTP 503") {
+				t.Fatalf("expected provider failure, got %v", err)
+			}
+		})
 	}
 }
 

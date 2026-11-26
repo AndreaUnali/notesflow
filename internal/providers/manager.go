@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"os"
 	"os/exec"
 	"slices"
 	"sync"
@@ -127,7 +126,7 @@ func (m *Manager) status(profile config.Profile, now time.Time) ProfileStatus {
 		info.AvailableAt, info.Status = u.RetryAt, "in pausa"
 	}
 	switch {
-	case profile.Driver == "openai-compatible" && profile.APIKeyEnv != "" && os.Getenv(profile.APIKeyEnv) == "":
+	case profile.Driver == "openai-compatible" && profile.APIKeyEnv != "" && profile.APIKey() == "":
 		info.Status = "chiave assente"
 		info.AvailableAt = time.Time{}
 	case profile.Driver == "opencode":

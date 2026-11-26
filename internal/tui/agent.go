@@ -77,6 +77,7 @@ func (m *Model) startAgentContext() tea.Cmd {
 func (m *Model) beginAgent(job agent.Job) tea.Cmd {
 	job.State, job.Error, job.PauseReason, job.ErrorHelp = agent.Working, "", "", ""
 	job.Result.Question, job.Deadline = nil, time.Time{}
+	job.Sources = agent.SourcesFor(m.root, job)
 	if !m.saveAgent(job) {
 		return nil
 	}
@@ -194,7 +195,8 @@ func (m *Model) advanceAgent(now time.Time) tea.Cmd {
 				m.saveAgent(job)
 			}
 		}
-		if job.State == agent.Ready && m.agents.applying == 0 && !m.chapterBusy {
+		if job.State == agent.Ready && m.agents.applying == 0 && !m.chapterBusy &&
+			(job.Todo == nil || !m.compiling && !m.savingNotes && !m.quitting) {
 			commands = append(commands, m.applyAgent(job))
 		}
 		if job.State != agent.Waiting || job.Result.Question == nil {
@@ -215,6 +217,9 @@ func (m *Model) advanceAgent(now time.Time) tea.Cmd {
 		}
 	}
 	m.renderNotice(now)
+	if len(commands) == 0 {
+		return m.startAITodo()
+	}
 	return tea.Batch(commands...)
 }
 
@@ -249,6 +254,13 @@ func (m *Model) answerAgent(job agent.Job, index int, automatic bool) tea.Cmd {
 func (m *Model) applyAgent(job agent.Job) tea.Cmd {
 	m.agents.applying = job.ID
 	e, ctx, root := m.editor, m.ctx, m.root
+	if job.Todo != nil {
+		engine := m.cfg.Tools.LatexEngine
+		return func() tea.Msg {
+			line, buffer, err := applyAITodo(ctx, root, engine, e, job)
+			return appliedAgent{job.ID, line, buffer, err}
+		}
+	}
 	return func() tea.Msg {
 		line, buffer, err := applyAgentToNotes(ctx, root, e, job)
 		return appliedAgent{job.ID, line, buffer, err}
@@ -309,10 +321,14 @@ func (m *Model) appliedAgent(result appliedAgent) {
 		if count := len(job.Result.Visuals); count > 0 {
 			extra += fmt.Sprintf(" · %d TODO Visual", count)
 		}
-		if job.Automatic {
+		if job.Automatic || job.Result.QuestionFallback {
 			extra += " · 1 TODO Manutenzione"
 		}
-		m.toastAgent(job.ID, "Agente · delega completata", job.Target.Title+extra, false)
+		title := "Agente · delega completata"
+		if job.Todo != nil {
+			title = "Agente · TODO-AI completato"
+		}
+		m.toastAgent(job.ID, title, job.Target.Title+extra, false)
 		m.store.Log("Delega completata · " + job.Target.File)
 	}
 }

@@ -3,12 +3,12 @@ package tui
 import (
 	"fmt"
 	"image"
-	"image/color"
 	"image/draw"
 	"math"
 	"time"
 
 	"github.com/AndreaUnali/notesflow/internal/agent"
+	"github.com/AndreaUnali/notesflow/internal/palette"
 	"github.com/AndreaUnali/notesflow/internal/terminal"
 )
 
@@ -111,9 +111,10 @@ func ringImage(progress float64, seconds int) *terminal.Graphic {
 	case seconds <= 45:
 		ring = courseRGB[3]
 	}
+	outline := rgb(palette.Line)
 	for i := range 224 {
 		fraction := float64(i) / 224
-		var shade color.RGBA = hexColor(0x34465F)
+		shade := outline
 		if fraction <= progress {
 			shade = ring
 		}

@@ -68,12 +68,16 @@ func (m *Model) mouse(event tea.MouseEvent) tea.Cmd {
 	l := m.layout()
 	if click {
 		if m.quitButton(l).contains(event.X, event.Y) {
-			return m.quit()
+			return m.quit(true)
 		}
 		if m.noticeRect().contains(event.X, event.Y) {
 			return m.openAgentActivity(m.agents.notice.id)
 		}
 		_, agentButton := m.agentButton()
+		_, save := m.saveButton(agentButton.x)
+		if save.contains(event.X, event.Y) {
+			return m.saveNotes()
+		}
 		if agentButton.contains(event.X, event.Y) {
 			return m.openCurrentAgent()
 		}

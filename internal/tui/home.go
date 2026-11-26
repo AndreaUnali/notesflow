@@ -44,6 +44,13 @@ func (m Model) suggestedFile() string {
 	if pos := m.savedPosition(); pos.File != "" {
 		return pos.File
 	}
+	if m.cfg.Structure == workflow.Chapters {
+		for _, file := range m.files() {
+			if strings.HasPrefix(file.file, "capitoli/") && strings.EqualFold(filepath.Ext(file.file), ".tex") {
+				return file.file
+			}
+		}
+	}
 	if file := m.mainTeX(); file != "" {
 		return file
 	}
@@ -62,6 +69,13 @@ func (m Model) savedPosition() network.Position {
 	return m.session.Position[m.course]
 }
 
+func (m Model) homeActions() int {
+	if m.cfg.Structure == workflow.SingleFile {
+		return int(homeActionCount) - 1
+	}
+	return int(homeActionCount)
+}
+
 func (m Model) homeItems() []homeItem {
 	pos := m.savedPosition()
 	resume := "Apri il documento principale"
@@ -73,8 +87,13 @@ func (m Model) homeItems() []homeItem {
 	}
 	items := []homeItem{
 		{title: "Riprendi", description: resume},
-		{title: "Nuovo capitolo", description: "Crea un file .tex e aggiungilo all’indice del corso"},
-		{title: "Delega", description: "Scegli una sezione, le fonti e il risultato atteso"},
+	}
+	if m.cfg.Structure != workflow.SingleFile {
+		items = append(items, homeItem{title: "Nuovo capitolo", description: "Crea un file .tex e aggiungilo all’indice del corso"})
+	}
+	items = append(items, homeItem{title: "Delega", description: "Scegli una sezione, le fonti e il risultato atteso"})
+	if m.cfg.Structure == workflow.SingleFile {
+		return items
 	}
 	titles := map[string]string{}
 	for _, group := range m.snapshot.Groups {
@@ -84,6 +103,9 @@ func (m Model) homeItems() []homeItem {
 	}
 	for _, node := range m.snapshot.Files {
 		if node.Kind != "file" || !m.fileInScope(node.File) || !strings.EqualFold(filepath.Ext(node.File), ".tex") {
+			continue
+		}
+		if m.cfg.Structure == workflow.Chapters && !strings.HasPrefix(node.File, "capitoli/") {
 			continue
 		}
 		title := titles[node.File]
@@ -120,25 +142,29 @@ func (m Model) homeContent(width, height int) ([]string, []homeHit) {
 	padding := strings.Repeat(" ", inset)
 	lines := []string{padding + homeTitleStyle.Render(clean(m.scopeName())), ""}
 	var hits []homeHit
-	for i, item := range items[:homeActionCount] {
+	actions := m.homeActions()
+	for i, item := range items[:actions] {
 		hits = append(hits, homeHit{cellRect{inset, len(lines), contentWidth, cardRows}, i})
 		for _, line := range homeCard(item, contentWidth, m.cursor == i && m.focus == mainFocus) {
 			lines = append(lines, padding+line)
 		}
-		if i+1 < int(homeActionCount) {
+		if i+1 < actions {
 			lines = append(lines, "")
 		}
 	}
+	if m.cfg.Structure == workflow.SingleFile {
+		return lines, hits
+	}
 	lines = append(lines, "", padding+muted.Bold(true).Render("Capitoli"), padding+dim.Render(strings.Repeat("─", contentWidth)))
-	chapters := items[homeActionCount:]
+	chapters := items[actions:]
 	if len(chapters) == 0 {
 		return append(lines, padding+muted.Render("Nessun capitolo")), hits
 	}
 	room := max(0, height-len(lines))
-	start := listStart(m.cursor-int(homeActionCount), len(chapters), room)
+	start := listStart(m.cursor-actions, len(chapters), room)
 	for i := start; i < min(len(chapters), start+room); i++ {
 		item := chapters[i]
-		index := int(homeActionCount) + i
+		index := actions + i
 		hits = append(hits, homeHit{cellRect{inset, len(lines), contentWidth, 1}, index})
 		label := homeChapter(item, i, contentWidth, m.cursor == index && m.focus == mainFocus)
 		lines = append(lines, padding+label)

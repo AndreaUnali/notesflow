@@ -17,7 +17,7 @@ local function theme()
     FloatBorder = { fg = c.line, bg = c.surface },
     Pmenu = { fg = c.text, bg = c.surface },
     PmenuSel = { fg = c.background, bg = c.cyan },
-    Visual = { bg = '#263658' },
+    Visual = { bg = c.selection },
     Comment = { fg = c.muted, italic = true },
     Statement = { fg = c.cyan },
     Type = { fg = c.purple },

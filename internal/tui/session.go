@@ -29,6 +29,13 @@ func (m Model) WithSession() Model {
 	return m
 }
 
+func (m Model) WithLaunchNotice(notice string) Model {
+	if notice != "" {
+		m.message = notice
+	}
+	return m
+}
+
 type workspaceChoice struct {
 	kind      string
 	options   []string
@@ -113,7 +120,7 @@ func (m *Model) workspaceKey(key string) tea.Cmd {
 	case "esc":
 		m.choice = workspaceChoice{}
 	case "ctrl+c", "q":
-		return m.quit()
+		return m.quit(key == "q")
 	}
 	return nil
 }

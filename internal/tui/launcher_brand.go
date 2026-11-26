@@ -13,6 +13,7 @@ import (
 	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
 
+	"github.com/AndreaUnali/notesflow/internal/palette"
 	"github.com/AndreaUnali/notesflow/internal/terminal"
 )
 
@@ -53,15 +54,19 @@ var wordmarkFont = sync.OnceValue(func() *opentype.Font {
 })
 
 func launchWordmark(cols, rows int, cellRatio float64) *terminal.Graphic {
-	serif := wordmarkFont()
-	if serif == nil {
+	return renderWordmark(cols, rows, cellRatio, palette.Cyan, palette.Purple)
+}
+
+func renderWordmark(cols, rows int, cellRatio float64, from, to string) *terminal.Graphic {
+	markFont := wordmarkFont()
+	if markFont == nil {
 		return nil
 	}
 	w, h := max(1, int(float64(cols*22)*cellRatio)), rows*22
 	const name = "Notesflow"
 	var face font.Face
 	for size := float64(h) * .80; size >= 9; size *= .86 {
-		candidate, err := opentype.NewFace(serif, &opentype.FaceOptions{Size: size, DPI: 72, Hinting: font.HintingNone})
+		candidate, err := opentype.NewFace(markFont, &opentype.FaceOptions{Size: size, DPI: 72, Hinting: font.HintingNone})
 		if err != nil {
 			return nil
 		}
@@ -84,7 +89,7 @@ func launchWordmark(cols, rows int, cellRatio float64) *terminal.Graphic {
 	drawer.DrawString(name)
 
 	img := image.NewNRGBA(mask.Bounds())
-	start, end := hexColor(0x00F5D4), hexColor(0xCA9EFF)
+	start, end := rgb(from), rgb(to)
 	textWidth := max(1, (bounds.Max.X - bounds.Min.X).Ceil())
 	colors := make([]color.NRGBA, w)
 	for x := range colors {

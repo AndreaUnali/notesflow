@@ -50,6 +50,14 @@ go run ./cmd/notesflow --workspace examples/workspace/analisi
 
 ![Schermata di avvio con ricerca, progetti recenti e grafi degli appunti](docs/screenshots/launcher.png)
 
+Al primo avvio puoi scegliere il tema e collegare OpenCode o un provider compatibile con OpenAI. Il catalogo ti mostra i modelli dichiarati dal collegamento. Scegline uno e invia un breve messaggio di prova per verificare che risponda. La chiave del provider diretto viene salvata nel file privato delle impostazioni utente. Puoi riaprire la configurazione dal selettore con **F2** o con `notesflow setup`.
+
+In **Aspetto**, usa **←/→** oppure **Invio** sulla palette per vederne subito il nome e i campioni. Seleziona **Applica palette e torna** per usare i nuovi colori nel selettore, nei progetti, in Neovim e nel grafo del browser. Le dieci palette di Notesflow sono adattate da [Catppuccin Mocha](https://catppuccin.com/palette/), [Dracula](https://draculatheme.com/contribute), [Nord](https://www.nordtheme.com/docs/colors-and-palettes/), [Gruvbox Dark](https://github.com/morhetz/gruvbox), [Tokyo Night](https://github.com/folke/tokyonight.nvim), [Solarized Dark](https://ethanschoonover.com/solarized/), [One Dark](https://github.com/atom/one-dark-syntax), [Rosé Pine](https://rosepinetheme.com/palette/), [Kanagawa Wave](https://github.com/rebelot/kanagawa.nvim) e [GitHub Dark](https://github.com/primer/github-vscode-theme).
+
+Dal selettore premi **Ctrl+N**, inserisci il titolo e scegli la struttura. Notesflow crea una cartella con quel titolo in `~/Documents/Notesflow`. **File unico** tiene sorgente, immagini e PDF nella cartella principale. **A capitoli** crea anche `config.tex`, `capitoli/`, `ausiliari/` e `immagini/`. Notesflow prova a compilare subito e aggiorna il PDF del progetto solo dopo una compilazione riuscita.
+
+Quando apri per la prima volta una cartella LaTeX esterna, Notesflow crea una copia in `~/Documents/Notesflow` e prova a compilarla. Un solo sorgente produce un progetto a file unico. Con più sorgenti, Notesflow organizza la copia a capitoli, aggiorna i riferimenti ai file che sposta e conserva le fonti e gli altri allegati. Le aperture successive della cartella originale riprendono la copia di lavoro.
+
 1. Avvia `notesflow` e scrivi il nome di una **Note Network**. La ricerca include i recenti e i progetti LaTeX in Scrivania, Documenti e nella cartella corrente. Premi **Ctrl+O** per aggiungere una cartella esistente, oppure incolla il percorso nella ricerca. Se hai già un progetto in mente, usa `notesflow --workspace /percorso/del/corso`.
 2. In Home, **Riprendi** riapre file e cursore dell’ultima sessione. **Nuovo capitolo** propone il file e il punto in cui includerlo nel documento principale. TODO, PDF e roadmap sono visibili dalla Home.
 3. Premi **Shift+Tab**, poi **2**, per scrivere. Il PDF occupa la colonna destra. Salva con **:w** e compila con **Shift+Tab**, poi **b**.
@@ -65,14 +73,15 @@ Premi **Shift+Tab** per raggiungere la barra di navigazione da qualunque vista, 
 | --- | --- |
 | **1–5** | Apri Home, Scrittura, Grafo, TODO o Attività. Puoi anche scegliere con **←/→** e confermare con **Invio**. |
 | **Tab** o **Esc** | Torna al pannello o al campo da cui sei partito. |
-| **q** | Esci da Notesflow. |
+| **q** | Torna al selettore dei progetti. |
+| **s** | Salva tutti i file modificati nell’editor aperto. |
 | **r** / **R** | Seleziona una tappa o espandi e comprimi la roadmap. Quando è compressa, condivide la barra in basso con scorciatoie, messaggi e stato. |
 | **t** | Seleziona i TODO. **←/→** passa fra Tutti, Classici, Visual e Manutenzione. |
 | **p** | Seleziona il PDF. **←/→** cambia pagina e **t** alterna pagina e testo. |
 | **b** / **c** / **?** | Compila il PDF, cambia corso o chiedi all’agente. |
 | **g** | Apri il dettaglio dell’agente da qualsiasi vista. |
 
-Per chiudere una sessione, usa **Shift+Tab**, poi **q**. Puoi anche cliccare **q Esci**. Se Neovim ha modifiche non salvate, Notesflow lascia aperta la sessione e ti riporta alla barra. Premi **2** per tornare in Scrittura. Chiudi un eventuale modulo con **Esc** e premi **Esc** in Neovim per tornare alla modalità normale. Salva tutti i buffer con **:wall**, poi ripeti **Shift+Tab → q**.
+Per tornare ai progetti, usa **Shift+Tab**, poi **q**, oppure clicca **q Progetti**. Dal selettore puoi aprire le impostazioni o premere **q** con la ricerca vuota per chiudere Notesflow. Se ci sono modifiche non salvate, il progetto rimane aperto. Usa **Salva** in alto anche dalla Home, poi torna al selettore. In Scrittura puoi continuare a usare **:w** o **:wall**.
 
 ## Roadmap e verifiche
 
@@ -101,12 +110,20 @@ Configura un profilo LLM in [notesflow.example.json](notesflow.example.json), op
 
 - Lo stato dell’agente è sempre in alto a destra. Cliccalo oppure premi **Shift+Tab**, poi **g**, per aprire il dettaglio con la fase, le fonti e l’esito. Se compare **Errore**, trovi in cima la causa e cosa controllare. **Invio** riprova la stessa delega.
 - Da **Scrittura**, premi **Shift+Tab**, poi **?**. Chiedi un aiuto sulla sezione corrente, su una formula o sull’ultima compilazione. La risposta è in **Attività**. Usa **f** per continuare o **w** per chiedere di applicare la proposta.
-- Da **Home**, seleziona **Delega**. Scegli un file o una sezione con **←/→**, inserisci la richiesta e premi **Tab** per scegliere le fonti. Usa **Invio** per aggiungere il risultato evidenziato o digita un intervallo come `slide.pdf:12-14`. **Ctrl+S** invia.
+- Da **Home**, seleziona **Delega**. Scegli un file o una sezione con **←/→**, inserisci la richiesta e premi **Tab** per scegliere le fonti. Premi **Invio** sul PDF evidenziato per aggiungerlo intero. Per scegliere alcune slide premi **→**, scrivi una pagina come `12` o un intervallo come `12-28` e premi **Invio**. Puoi aggiungere più PDF prima di inviare con **Ctrl+S**.
 - L’agente riceve il testo della destinazione e le fonti selezionate. Il risultato si applica quando il blocco assegnato è ancora quello di partenza. Se stai scrivendo altrove nello stesso buffer, salvi tutto insieme con **:w**. In caso di conflitto apri **Attività** per confrontare proposta e appunti.
 - Quando l’agente ha una domanda appare una notifica in alto a destra. Cliccala o premi **Shift+Tab**, poi **5**, per scegliere. Dopo 90 secondi si applica la scelta consigliata e compare un **TODO Manutenzione**. Puoi cambiare il tempo con `agent.question_seconds`. Nel dettaglio, **P** mette in pausa, **Invio** riprende o riprova, **s** aggiunge una fonte e **f** invia un messaggio. Se chiudi Notesflow durante la richiesta, la delega resta in pausa al prossimo avvio.
 - Le figure suggerite compaiono come **TODO Visual** con il riferimento alla slide o la descrizione del diagramma. A delega completata, la notifica apre il riepilogo con fonti e modifiche.
 
 Per aprire direttamente OpenCode, usa `notesflow agent --workspace /percorso/del/corso`.
+
+Per lasciare un compito all’agente, scrivi e salva un commento LaTeX nella sezione interessata. Per esempio:
+
+```latex
+% TODO-AI: sposta la figura subito dopo questo paragrafo
+```
+
+I **TODO-AI** appaiono nel filtro **AI**. L’agente li prende uno alla volta quando è libero e può chiederti una scelta in **Attività**. Scaduto il tempo di risposta, usa la scelta consigliata e lascia un **TODO Manutenzione**. Notesflow prova a compilare la correzione su una copia prima di applicarla e chiudere il TODO. Se la compilazione fallisce o il file è cambiato, la richiesta resta aperta e il motivo compare in **Attività**.
 
 ## Ghostty a schermo intero
 

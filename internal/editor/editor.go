@@ -29,7 +29,7 @@ type Editor struct {
 	cleanup sync.Once
 }
 
-func Start(ctx context.Context, dir string, width, height int) (*Editor, error) {
+func Start(ctx context.Context, dir string, width, height int, colors palette.Colors) (*Editor, error) {
 	v, err := nvim.NewChildProcess(
 		nvim.ChildProcessContext(ctx), nvim.ChildProcessDir(dir),
 		nvim.ChildProcessArgs("--embed", "--cmd", "let g:notesflow = v:true"), nvim.ChildProcessServe(false),
@@ -64,9 +64,9 @@ func Start(ctx context.Context, dir string, width, height int) (*Editor, error) 
 	}
 	if os.Getenv("NOTESFLOW_NVIM_THEME") != "native" {
 		_ = v.ExecLua(theme, nil, map[string]string{
-			"background": palette.Background, "surface": palette.Surface, "line": palette.Line,
-			"text": palette.Text, "muted": palette.Muted, "cyan": palette.Cyan, "pink": palette.Pink,
-			"purple": palette.Purple, "yellow": palette.Yellow,
+			"background": colors.Background, "surface": colors.Surface, "line": colors.Line,
+			"text": colors.Text, "muted": colors.Muted, "cyan": colors.Cyan, "pink": colors.Pink,
+			"purple": colors.Purple, "yellow": colors.Yellow, "selection": colors.Selection,
 		})
 	}
 	go e.dispatch()

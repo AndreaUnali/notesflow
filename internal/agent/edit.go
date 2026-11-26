@@ -93,6 +93,9 @@ func Replacement(job Job) (string, error) {
 		var result []string
 		for line := range strings.SplitSeq(source, "\n") {
 			if guardedLine.MatchString(line) && !strings.HasPrefix(strings.TrimSpace(line), "%") {
+				if job.Todo != nil {
+					line = figurePlacement.ReplaceAllString(line, "$1")
+				}
 				result = append(result, strings.TrimSpace(line))
 			}
 		}
@@ -106,6 +109,13 @@ func Replacement(job Job) (string, error) {
 		after, _, _ := strings.Cut(text, "\n")
 		if before != after {
 			return "", errors.New("la proposta cambia l’intestazione della sezione")
+		}
+	}
+	if job.Todo != nil {
+		var err error
+		text, err = completeTodo(job, text)
+		if err != nil {
+			return "", err
 		}
 	}
 	var tasks []string
@@ -145,6 +155,10 @@ func Tasks(job Job) []parser.Task {
 	if job.Automatic {
 		reason := job.Decision + " · " + job.DecisionWhy
 		add(parser.MaintenanceTask, "Verifica la scelta automatica «"+oneLine(reason, 350)+"»")
+	} else if job.Result.QuestionFallback {
+		add(parser.MaintenanceTask, "Verifica la bozza: l’agente ha proseguito senza una domanda utilizzabile.")
+	} else if job.Todo != nil && (job.State == Review || job.State == Failed) {
+		add(parser.MaintenanceTask, "Verifica il TODO-AI «"+oneLine(job.Goal, 180)+"» · "+oneLine(job.Error, 230))
 	}
 	return tasks
 }

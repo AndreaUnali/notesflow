@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -18,12 +19,18 @@ var ErrSourceChanged = errors.New("il sorgente è cambiato")
 type Chapter struct {
 	Main, File, Title string
 	Line              int
+	Numbered          bool
 }
 
 var documentEnd = regexp.MustCompile(`(?m)^[\t ]*\\end\s*\{document\}`)
 var documentClass = regexp.MustCompile(`(?m)^[\t ]*\\documentclass(?:\[[^\r\n]*\])?\s*\{(book|report|memoir|scrbook|scrreprt)\}`)
+var chapterNumber = regexp.MustCompile(`^ch([1-9][0-9]*)_.+\.tex$`)
 
 func PlanChapter(root, main, title string) (Chapter, error) {
+	return PlanChapterIn(root, main, title, false)
+}
+
+func PlanChapterIn(root, main, title string, numbered bool) (Chapter, error) {
 	title = strings.Join(strings.Fields(title), " ")
 	if title == "" || len([]rune(title)) > 120 {
 		return Chapter{}, errors.New("inserisci un titolo da 1 a 120 caratteri")
@@ -55,11 +62,27 @@ func PlanChapter(root, main, title string) (Chapter, error) {
 	if alt := filepath.Join(filepath.Dir(main), "chapters"); !directory(filepath.Join(root, folder)) && directory(filepath.Join(root, alt)) {
 		folder = alt
 	}
+	if numbered {
+		entries, err := os.ReadDir(filepath.Join(root, folder))
+		if err != nil {
+			return Chapter{}, err
+		}
+		latest := 0
+		for _, entry := range entries {
+			if match := chapterNumber.FindStringSubmatch(entry.Name()); !entry.IsDir() && match != nil {
+				number, err := strconv.Atoi(match[1])
+				if err == nil && number < int(^uint(0)>>1) {
+					latest = max(latest, number)
+				}
+			}
+		}
+		slug = fmt.Sprintf("ch%d_%s", latest+1, slug)
+	}
 	file := filepath.ToSlash(filepath.Join(folder, slug+".tex"))
 	if _, err := os.Lstat(filepath.Join(root, file)); !errors.Is(err, os.ErrNotExist) {
 		return Chapter{}, fmt.Errorf("il file %s esiste già o non è disponibile", file)
 	}
-	return Chapter{Main: main, File: file, Title: title, Line: 1 + bytes.Count(data[:closing[0][0]], []byte("\n"))}, nil
+	return Chapter{Main: main, File: file, Title: title, Line: 1 + bytes.Count(data[:closing[0][0]], []byte("\n")), Numbered: numbered}, nil
 }
 
 func directory(path string) bool {
@@ -68,7 +91,7 @@ func directory(path string) bool {
 }
 
 func CreateChapter(root string, plan Chapter) error {
-	current, err := PlanChapter(root, plan.Main, plan.Title)
+	current, err := PlanChapterIn(root, plan.Main, plan.Title, plan.Numbered)
 	if err != nil {
 		return err
 	}

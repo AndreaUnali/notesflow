@@ -20,6 +20,7 @@ var todoTabs = [...]todoTabSpec{
 	{kind: "TODO", label: "Classici", short: "C"},
 	{kind: "VISUAL", label: "Visual", short: "V"},
 	{kind: parser.MaintenanceTask, label: "Manutenzione", short: "M"},
+	{kind: parser.AITask, label: "AI", short: "AI"},
 }
 
 type sidebarButton struct {
@@ -33,11 +34,11 @@ func sidebarTabs(width int) []sidebarButton {
 	for i, tab := range todoTabs {
 		label := tab.label
 		switch {
-		case width >= 43:
+		case width >= 50:
 			label = " " + label + " "
 		case width < 30:
 			label = tab.short
-		case i == len(todoTabs)-1 && width < 36:
+		case tab.kind == parser.MaintenanceTask && width < 39:
 			label = "Manut."
 		}
 		next := x + lipgloss.Width(label)
@@ -83,6 +84,8 @@ func (m Model) sidebarTasks(width, height int) []sidebarEntry {
 			first = pink.Render(" ◆ ")
 		case parser.MaintenanceTask:
 			first = graphColors[3].Render(" ! ")
+		case parser.AITask:
+			first = graphColors[2].Render(" ✦ ")
 		}
 		lines := strings.Split(ansi.Wrap(clean(task.Text), width-3, " "), "\n")
 		if len(lines) > 2 {

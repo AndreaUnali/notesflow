@@ -16,11 +16,12 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gofrs/flock"
+	"github.com/charmbracelet/x/term"
 
 	"github.com/AndreaUnali/notesflow/internal/config"
 	"github.com/AndreaUnali/notesflow/internal/graph"
 	"github.com/AndreaUnali/notesflow/internal/network"
+	"github.com/AndreaUnali/notesflow/internal/palette"
 	"github.com/AndreaUnali/notesflow/internal/parser"
 	"github.com/AndreaUnali/notesflow/internal/providers"
 	"github.com/AndreaUnali/notesflow/internal/terminal"
@@ -33,6 +34,9 @@ import (
 const usage = `Uso: notesflow [comando] [opzioni]
 
   tui        Workspace interattivo nel terminale (predefinito)
+  setup      Configura aspetto, OpenCode e provider API
+  new        Crea un progetto a file unico o a capitoli
+  import     Copia e compila un progetto LaTeX in Documenti/Notesflow
   serve      Server del grafo e watcher in primo piano
   index      Scansione locale e snapshot JSON
   todos      Elenca o riassume i TODO
@@ -77,14 +81,17 @@ func run(ctx context.Context, args []string) error {
 	var port int
 	var browse, summary, viewPDF bool
 	var kind, section, course, model string
+	var importTitle string
 	switch command {
-	case "tui", "serve":
+	case "tui", "new", "serve":
 		flags.IntVar(&port, "port", 0, "porta loopback (0 = scelta automatica)")
 		flags.BoolVar(&browse, "open", false, "apri il grafo nel browser all’avvio")
-	case "index", "diagram":
+	case "index", "diagram", "setup":
+	case "import":
+		flags.StringVar(&importTitle, "title", "", "nome della copia importata")
 	case "todos":
 		flags.BoolVar(&summary, "summary", false, "riepilogo e suggerimenti dal provider configurato")
-		flags.StringVar(&kind, "kind", "", "tipo: TODO, VISUAL o MANUTENZIONE")
+		flags.StringVar(&kind, "kind", "", "tipo: TODO, TODO-AI, VISUAL o MANUTENZIONE")
 		flags.StringVar(&section, "section", "", "filtra per titolo o ID della sezione")
 		flags.StringVar(&course, "course", "", "filtra per corso")
 	case "compile":
@@ -114,46 +121,67 @@ func run(ctx context.Context, args []string) error {
 		return errors.New("argomenti del comando non validi")
 	}
 	kind = strings.ToUpper(kind)
-	if kind != "" && kind != "TODO" && kind != "VISUAL" && kind != parser.MaintenanceTask {
-		return errors.New("--kind deve essere TODO, VISUAL o MANUTENZIONE")
+	if kind != "" && kind != "TODO" && kind != "VISUAL" && kind != parser.MaintenanceTask && kind != parser.AITask {
+		return errors.New("--kind deve essere TODO, TODO-AI, VISUAL o MANUTENZIONE")
 	}
 	if port < 0 || port > 65535 {
 		return errors.New("--port deve essere compresa tra 0 e 65535")
 	}
 	explicitWorkspace := false
 	flags.Visit(func(f *flag.Flag) { explicitWorkspace = explicitWorkspace || f.Name == "workspace" })
-	if command == "tui" && !explicitWorkspace {
-		selected, err := tui.ChooseNetwork(ctx, terminal.New(os.Stdout, terminal.Enabled()))
-		if err != nil || selected == "" {
+	var settings config.Settings
+	var exists bool
+	var err error
+	switch command {
+	case "setup", "tui", "new", "serve", "todos", "agent":
+		settings, exists, err = config.LoadSettings()
+		if err != nil {
 			return err
 		}
-		*workspace = selected
 	}
-	root, err := filepath.Abs(*workspace)
+	interactive := term.IsTerminal(os.Stdin.Fd())
+	if command == "setup" || ((command == "tui" || command == "new") && interactive && !exists) {
+		if !interactive {
+			return errors.New("apri un terminale interattivo per configurare Notesflow")
+		}
+		configured, saved, err := tui.RunSetup(ctx, settings)
+		if err != nil || command == "setup" {
+			return err
+		}
+		if saved {
+			settings = configured
+		}
+	}
+	if command == "new" || command == "tui" {
+		start := workspaceStart{configFile: *cfgPath, create: command == "new"}
+		if explicitWorkspace {
+			start.path = *workspace
+		}
+		return runInteractive(ctx, start, settings, port, browse)
+	}
+	root, err := workspaceRoot(*workspace)
 	if err != nil {
 		return err
 	}
-	root, err = filepath.EvalSymlinks(root)
+	if command == "import" {
+		imported, err := importWorkspace(ctx, root, importTitle, *cfgPath)
+		if err != nil {
+			return err
+		}
+		if imported.Root != root {
+			root, *cfgPath = imported.Root, ""
+		}
+	}
+	cfg, err := config.LoadWithSettings(root, *cfgPath, settings)
 	if err != nil {
 		return err
-	}
-	info, err := os.Stat(root)
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() {
-		return errors.New("--workspace deve indicare una directory")
-	}
-	cfg, err := config.Load(root, *cfgPath)
-	if err != nil {
-		return err
-	}
-	if command == "tui" {
-		cfg.Project = network.DisplayName(root, cfg.Project)
 	}
 	switch command {
+	case "import":
+		fmt.Println(root)
+		return compileImported(ctx, root, cfg)
 	case "compile":
-		file, err := workflow.Compile(ctx, root, flags.Arg(0), cfg.Tools.LatexEngine)
+		file, err := workflow.CompileIn(ctx, root, flags.Arg(0), cfg.Tools.LatexEngine, cfg.Tools.BuildDir)
 		if err != nil {
 			return err
 		}
@@ -184,49 +212,56 @@ func run(ctx context.Context, args []string) error {
 		cmd.Dir, cmd.Stdin, cmd.Stdout, cmd.Stderr = root, os.Stdin, os.Stdout, os.Stderr
 		return cmd.Run()
 	}
-	stateDir := filepath.Join(root, ".notesflow")
-	if err = os.MkdirAll(stateDir, 0700); err != nil {
-		return err
-	}
-	lock := flock.New(filepath.Join(stateDir, "process.lock"))
-	locked, err := lock.TryLock()
+	project, err := openProjectState(root)
 	if err != nil {
 		return err
 	}
-	if !locked {
-		return errors.New("un’altra istanza usa già questo workspace; usa la sua TUI o il suo grafo")
-	}
-	defer lock.Close()
-	store, err := graph.Open(filepath.Join(stateDir, "index.json"))
-	if err != nil {
-		return err
-	}
-	watch := watcher.New(root, store)
-	if err = watch.Scan(ctx); err != nil {
+	defer project.lock.Close()
+	if err = project.watch.Scan(ctx); err != nil {
 		if command == "index" || command == "todos" {
 			return err
 		}
-		store.Log("Scansione iniziale: " + err.Error())
+		project.store.Log("Scansione iniziale: " + err.Error())
 	}
 	if command == "index" {
-		snapshot, _ := store.Snapshot()
+		snapshot, _ := project.store.Snapshot()
 		return outputJSON(snapshot)
 	}
 	if command == "todos" && !summary {
-		return outputJSON(filterTasks(store, kind, section, course))
+		return outputJSON(filterTasks(project.store, kind, section, course))
 	}
-	manager, err := providers.Open(filepath.Join(stateDir, "providers.json"), cfg.Providers)
+	manager, err := providers.Open(filepath.Join(project.dir, "providers.json"), cfg.Providers)
 	if err != nil {
 		return err
 	}
 	if command == "todos" {
-		text, err := manager.Summarize(ctx, filterTasks(store, kind, section, course))
+		text, err := manager.Summarize(ctx, filterTasks(project.store, kind, section, course))
 		if text != "" {
 			fmt.Println(text)
 		}
 		return err
 	}
-	return live(ctx, command, root, port, browse, cfg, store, watch, manager)
+	_, err = live(ctx, command, root, port, browse, cfg, project.store, project.watch, manager, "", palette.Preset(settings.Theme))
+	return err
+}
+
+func compileImported(ctx context.Context, root string, cfg config.Config) error {
+	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+	_, err := workflow.CompileIn(ctx, root, cfg.Tools.MainTeX, cfg.Tools.LatexEngine, cfg.Tools.BuildDir)
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return err
+}
+
+func importCompileNotice(err error) string {
+	for _, line := range strings.Split(err.Error(), "\n") {
+		if reason, ok := strings.CutPrefix(line, "! "); ok {
+			return reason
+		}
+	}
+	return "Prima compilazione: " + strings.SplitN(err.Error(), "\n", 2)[0]
 }
 
 func outputJSON(value any) error {
@@ -249,19 +284,21 @@ func filterTasks(store *graph.Store, kind, section, course string) []parser.Task
 	return tasks
 }
 
-func live(parent context.Context, command, root string, port int, browse bool, cfg config.Config, store *graph.Store, watch *watcher.Watcher, manager *providers.Manager) error {
+func live(parent context.Context, command, root string, port int, browse bool, cfg config.Config, store *graph.Store, watch *watcher.Watcher, manager *providers.Manager, initialNotice string, colors palette.Colors) (bool, error) {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	var server *web.Server
 	var url string
 	var err error
+	var returnToLauncher bool
+	var editorDone <-chan struct{}
 	failures := make(chan error, 1)
 	if command == "serve" || browse || port != 0 {
-		server, err = web.Listen(ctx, port, store, func(ctx context.Context, node parser.Node) error {
+		server, err = web.Listen(ctx, port, store, colors, func(ctx context.Context, node parser.Node) error {
 			return workflow.RemoteEdit(ctx, root, cfg.Tools.NvimServer, node.File, node.Line)
 		})
 		if err != nil {
-			return err
+			return false, err
 		}
 		url = server.URL
 		go func() {
@@ -295,8 +332,12 @@ func live(parent context.Context, command, root string, port int, browse bool, c
 		if err := network.Remember(root, cfg.Project, snapshot); err != nil {
 			store.Log("Note Network recenti: " + err.Error())
 		}
-		model := tui.New(ctx, root, url, cfg, store, manager).WithSurface(surface).WithSession()
-		_, err = tea.NewProgram(model, tea.WithContext(ctx), tea.WithAltScreen(), tea.WithOutput(surface), tea.WithMouseAllMotion(), tea.WithFPS(60)).Run()
+		model := tui.New(ctx, root, url, cfg, store, manager).WithSurface(surface).WithSession().WithLaunchNotice(initialNotice)
+		var result tea.Model
+		result, err = tea.NewProgram(model, tea.WithContext(ctx), tea.WithAltScreen(), tea.WithOutput(surface), tea.WithMouseAllMotion(), tea.WithFPS(60)).Run()
+		if closed, ok := result.(tui.Model); ok {
+			returnToLauncher, editorDone = closed.ReturnToLauncher(), closed.EditorDone()
+		}
 		snapshot, _ = store.Snapshot()
 		if rememberErr := network.Remember(root, cfg.Project, snapshot); rememberErr != nil {
 			fmt.Fprintln(os.Stderr, "Note Network recenti:", rememberErr)
@@ -311,11 +352,17 @@ func live(parent context.Context, command, root string, port int, browse bool, c
 	if server != nil {
 		err = errors.Join(err, server.Shutdown(shutdown))
 	}
+	if editorDone != nil {
+		select {
+		case <-editorDone:
+		case <-shutdown.Done():
+		}
+	}
 	workers.Wait()
 	select {
 	case failure := <-failures:
 		err = errors.Join(err, failure)
 	default:
 	}
-	return err
+	return returnToLauncher && parent.Err() == nil, err
 }

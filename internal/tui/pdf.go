@@ -260,10 +260,19 @@ type compiled struct {
 }
 
 func (m *Model) compile() tea.Cmd {
+	if m.agents.applying != 0 {
+		if job, ok := m.agents.book.Lookup(m.agents.applying); ok && job.Todo != nil {
+			m.message = "Verifica del PDF in corso per il TODO-AI"
+			return nil
+		}
+	}
+	return m.compileFile(m.mainTeX())
+}
+
+func (m *Model) compileFile(file string) tea.Cmd {
 	if m.compiling {
 		return nil
 	}
-	file := m.mainTeX()
 	if file == "" {
 		m.message = "Imposta tools.main_tex per scegliere il documento principale"
 		return nil
@@ -273,7 +282,7 @@ func (m *Model) compile() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(m.ctx, 90*time.Second)
 		defer cancel()
-		out, err := workflow.Compile(ctx, m.root, file, m.cfg.Tools.LatexEngine)
+		out, err := workflow.CompileIn(ctx, m.root, file, m.cfg.Tools.LatexEngine, m.cfg.Tools.BuildDir)
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			err = errors.New("compilazione oltre 90 secondi")
 		}
