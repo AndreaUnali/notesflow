@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -17,7 +18,7 @@ import (
 )
 
 const (
-	maxSourceBytes = 48_000
+	maxSourceBytes = 64_000
 	maxSources     = 8
 	maxRoadmapRead = 1 << 20
 )
@@ -193,12 +194,28 @@ func readPDFSource(ctx context.Context, path string, ref Ref) (string, error) {
 }
 
 func condenseSources(ctx context.Context, backend Backend, job Job, materials []Material) error {
-	if len(materials) == 0 {
+	total := 0
+	for _, source := range materials {
+		total += len(source.Text)
+	}
+	if total <= maxSourceBytes {
 		return nil
 	}
-	limit := maxSourceBytes / len(materials)
-	for i, source := range materials {
+	// Give shorter sources their full space first. Longer PDFs can use
+	// the remaining space without requesting extra model calls for small PDFs.
+	order := make([]int, len(materials))
+	for i := range order {
+		order[i] = i
+	}
+	slices.SortStableFunc(order, func(a, b int) int {
+		return cmp.Compare(len(materials[a].Text), len(materials[b].Text))
+	})
+	budget := maxSourceBytes
+	for position, i := range order {
+		source := materials[i]
+		limit := budget / (len(order) - position)
 		if len(source.Text) <= limit {
+			budget -= len(source.Text)
 			continue
 		}
 		chunks := sourceChunks(source.Text)
@@ -222,6 +239,7 @@ func condenseSources(ctx context.Context, backend Backend, job Job, materials []
 			notes.WriteString(summary[:utf8Boundary(summary, partLimit)])
 		}
 		materials[i].Text = notes.String()
+		budget -= notes.Len()
 	}
 	return nil
 }
@@ -229,7 +247,7 @@ func condenseSources(ctx context.Context, backend Backend, job Job, materials []
 // sourceChunks favors page boundaries and carries the page label across a split page.
 func sourceChunks(text string) []string {
 	const (
-		chunkSize = 24_000
+		chunkSize = 32_000
 		pageLabel = "[Pagina "
 	)
 	var chunks []string

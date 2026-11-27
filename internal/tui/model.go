@@ -22,6 +22,7 @@ import (
 	"github.com/AndreaUnali/notesflow/internal/parser"
 	"github.com/AndreaUnali/notesflow/internal/providers"
 	"github.com/AndreaUnali/notesflow/internal/terminal"
+	"github.com/AndreaUnali/notesflow/internal/watcher"
 	"github.com/AndreaUnali/notesflow/internal/workflow"
 )
 
@@ -126,8 +127,11 @@ func (m Model) WithSurface(surface *terminal.Surface) Model {
 
 type tick time.Time
 type summarized struct {
-	text string
-	err  error
+	id     int
+	text   string
+	err    error
+	tokens *int
+	at     time.Time
 }
 type source struct {
 	file string
@@ -236,16 +240,20 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 		m.lastCompile = ""
 		m.message = "PDF aggiornato · " + filepath.Base(v.file)
 		if v.err != nil {
-			m.message = "Compilazione fallita · " + strings.SplitN(v.err.Error(), "\n", 2)[0] + " · vedi 5 Attività"
+			m.message = "Compilazione fallita · " + strings.SplitN(v.err.Error(), "\n", 2)[0] + " · Attività → l Registro tecnico"
 			m.store.Log(v.err.Error())
 			log := []rune(strings.ReplaceAll(v.err.Error(), m.root+string(filepath.Separator), ""))
 			m.lastCompile = string(log[:min(3500, len(log))])
+		}
+		if v.job != 0 {
+			m.finishAgentPDF(v)
 		}
 		cmd := m.probePDF()
 		return m, cmd
 	case summarized:
 		m.summarizing = false
 		m.summary, m.summaryOffset = v.text, 0
+		m.finishSummaryActivity(v)
 		m.message = "Riepilogo aggiornato"
 		if v.err != nil {
 			m.message = v.err.Error()
@@ -294,10 +302,9 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 		m.showAgentForm("ask", 0, filepath.ToSlash(file), v.line)
 		m.form.buffer, m.form.bufferFile = v.buffer, filepath.ToSlash(file)
 	case agentPrepared:
-		if run, ok := m.agents.running[v.id]; ok && run.token == v.token {
-			run.preparing = false
-			m.agents.running[v.id] = run
-		}
+		m.markAgentPrepared(v)
+	case watcher.AnalysisActivity:
+		m.recordGraphActivity(v)
 	case agentResult:
 		m.finishAgent(v)
 		cmd := m.advanceAgent(time.Now())
@@ -305,7 +312,7 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 	case appliedAgent:
 		m.appliedAgent(v)
 		if job, ok := m.agents.book.Lookup(v.id); ok && job.Todo != nil && job.State == agent.Completed && !job.Buffered {
-			return m, m.compileFile(job.Todo.MainTeX)
+			return m, m.compileFile(job.Todo.MainTeX, job.ID)
 		}
 		cmd := m.advanceAgent(time.Now())
 		return m, cmd
@@ -456,6 +463,11 @@ func (m Model) key(key tea.KeyMsg) (Model, tea.Cmd) {
 			m.cursor = max(0, min(m.cursor+delta, len(m.rows())-1))
 		}
 		m.prepareGraph()
+	case "l":
+		if m.tab == activityTab {
+			m.agents.log = !m.agents.log
+			m.cursor = 0
+		}
 	case "enter":
 		cmd := m.activate()
 		return m, cmd
@@ -471,18 +483,17 @@ func (m Model) key(key tea.KeyMsg) (Model, tea.Cmd) {
 		}
 	case "s":
 		if m.tab == todoTab && !m.summarizing {
-			tasks := m.tasks(true)
-			m.summarizing, m.showSummary, m.summary = true, true, ""
-			return m, func() tea.Msg {
-				report, err := m.manager.Summarize(m.ctx, tasks)
-				return summarized{report, err}
-			}
+			cmd := m.summarizeTasks()
+			return m, cmd
 		}
 	case "v":
 		if m.tab == todoTab {
 			m.showSummary = !m.showSummary
 		}
 	case "esc", "backspace", "+", "=", "-", "0", "left", "right":
+		if s == "esc" && m.tab == activityTab && m.agents.log {
+			m.agents.log, m.cursor = false, 0
+		}
 		if m.tab == graphTab {
 			switch s {
 			case "esc", "backspace":
@@ -537,9 +548,6 @@ func (m *Model) navigate(key string) tea.Cmd {
 func (m *Model) command(key string) (tea.Cmd, bool) {
 	switch key {
 	case "1", "2", "3", "4", "5":
-		if key == "5" && m.agents.notice.id > 0 {
-			return m.openAgentActivity(m.agents.notice.id), true
-		}
 		return m.setTab(int(key[0] - '1')), true
 	case "g":
 		return m.openCurrentAgent(), true
@@ -590,7 +598,7 @@ func (m *Model) command(key string) (tea.Cmd, bool) {
 func (m *Model) setTab(tab int) tea.Cmd {
 	m.tab, m.cursor, m.focus, m.graphSearch = tab, 0, mainFocus, false
 	m.commandMode = false
-	m.agents.detail, m.agents.offset = 0, 0
+	m.agents.detail, m.agents.offset, m.agents.log = 0, 0, false
 	m.graphDrag, m.graphHover = dragState{}, ""
 	switch tab {
 	case editorTab:
@@ -701,6 +709,9 @@ func (m *Model) activate() tea.Cmd {
 		return nil
 	}
 	if m.tab == activityTab {
+		if m.agents.log {
+			return nil
+		}
 		jobs := m.agentTasks()
 		if m.cursor < len(jobs) {
 			return m.openAgentActivity(jobs[m.cursor].ID)
@@ -983,18 +994,15 @@ func (m Model) rows() []row {
 			rows = append(rows, row{fmt.Sprintf("%s · %s  (%s:%d)", task.Kind, task.Text, task.File, task.Line), source{task.File, task.Line}})
 		}
 	case activityTab:
-		for _, job := range m.agentTasks() {
-			label := "Chiedi"
-			if job.Write {
-				label = "Delega"
+		if m.agents.log && m.store != nil {
+			for _, event := range slices.Backward(m.store.Activity()) {
+				for _, line := range strings.Split(event.Text, "\n") {
+					rows = append(rows, row{text: event.Time.Local().Format("15:04:05") + " · " + line})
+				}
 			}
-			rows = append(rows, row{text: fmt.Sprintf("%s · %s · %s", label, job.Target.Title, m.agentPhase(job))})
-		}
-		events := m.store.Activity()
-		for i := len(events) - 1; i >= 0; i-- {
-			event := events[i]
-			for _, line := range strings.Split(event.Text, "\n") {
-				rows = append(rows, row{text: event.Time.Local().Format("15:04:05") + " · " + line})
+		} else {
+			for _, job := range m.agentTasks() {
+				rows = append(rows, row{text: activityTitle(job)})
 			}
 		}
 	}

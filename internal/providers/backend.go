@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/AndreaUnali/notesflow/internal/agent"
 	"github.com/AndreaUnali/notesflow/internal/config"
 )
 
@@ -21,7 +22,6 @@ type message struct {
 }
 
 var httpClient = &http.Client{
-	Timeout:       45 * time.Second,
 	CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 }
 
@@ -29,7 +29,13 @@ func complete(ctx context.Context, p config.Profile, instructions, data string) 
 	if p.Driver == "opencode" {
 		return openCode(ctx, p.Model, instructions+"\n\n"+data)
 	}
-	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	return completeHTTP(ctx, p, instructions, data, 90*time.Second)
+}
+
+func completeHTTP(ctx context.Context, p config.Profile, instructions, data string, timeout time.Duration) (string, error) {
+	var reported *int
+	defer func() { agent.ReportTokens(ctx, reported) }()
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	body, err := json.Marshal(struct {
 		Model    string    `json:"model"`
@@ -60,16 +66,36 @@ func complete(ctx context.Context, p config.Profile, instructions, data string) 
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		retry := retryAfter(res.Header.Get("Retry-After"))
-		if res.StatusCode == http.StatusTooManyRequests && retry.IsZero() {
-			retry = time.Now().Add(time.Minute)
+		now := time.Now()
+		if !retry.After(now) && temporaryStatus(res.StatusCode) {
+			retry = now.Add(3 * time.Second)
+			if res.StatusCode == http.StatusTooManyRequests {
+				retry = now.Add(time.Minute)
+			}
 		}
 		return "", &requestError{message: fmt.Sprintf("HTTP %d", res.StatusCode), retryAt: retry, status: res.StatusCode}
 	}
-	var result struct{ Choices []struct{ Message message } }
-	if err := json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&result); err != nil || len(result.Choices) == 0 || strings.TrimSpace(result.Choices[0].Message.Content) == "" {
+	var result struct {
+		Choices []struct{ Message message }
+		Usage   struct {
+			Total *int `json:"total_tokens"`
+		}
+	}
+	err = json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&result)
+	reported = result.Usage.Total
+	if err != nil || len(result.Choices) == 0 || strings.TrimSpace(result.Choices[0].Message.Content) == "" {
 		return "", errors.New("risposta chat/completions non valida o vuota")
 	}
 	return strings.TrimSpace(result.Choices[0].Message.Content), nil
+}
+
+func temporaryStatus(status int) bool {
+	switch status {
+	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
 }
 
 func retryAfter(value string) time.Time {

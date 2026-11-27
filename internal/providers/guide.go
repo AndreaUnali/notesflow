@@ -14,7 +14,7 @@ import (
 )
 
 // A delegation can generate a whole section after the router tries several models.
-const delegationOpenCodeTimeout = 4 * time.Minute
+const delegationTimeout = 4 * time.Minute
 
 func (m *Manager) CanGuide() bool {
 	profiles := m.Snapshot().Profiles
@@ -61,7 +61,7 @@ Se write è true, prepara sempre la bozza effettiva in replacement. Se una fonte
 		return nil
 	}
 	guideWithOpenCode := func(model string) error {
-		text, runErr := runOpenCode(ctx, model, instructions+"\n\n"+string(input), delegationOpenCodeTimeout)
+		text, runErr := runOpenCode(ctx, model, instructions+"\n\n"+string(input), delegationTimeout)
 		if runErr == nil {
 			return decode(text)
 		}
@@ -78,17 +78,32 @@ Se write è true, prepara sempre la bozza effettiva in replacement. Se una fonte
 		err = guideWithOpenCode("")
 		return draft, err
 	}
-	_, err = m.runFor(ctx, realProfile, func(p config.Profile) error {
+	completeGuide := func(p config.Profile) error {
 		if p.Driver == "opencode" {
 			return guideWithOpenCode(p.Model)
 		}
-		text, err := complete(ctx, p, instructions, string(input))
+		text, err := completeHTTP(ctx, p, instructions, string(input), delegationTimeout)
 		if err != nil {
 			return err
 		}
 		return decode(text)
-	})
+	}
+	_, err = m.runFor(ctx, realProfile, completeGuide)
 	var unavailable *Unavailable
+	var requestFailure *requestError
+	if errors.As(err, &unavailable) &&
+		(unavailable.cause == nil || errors.As(unavailable.cause, &requestFailure) && temporaryStatus(requestFailure.status)) {
+		if delay := time.Until(unavailable.RetryAt); delay > 0 && delay <= 65*time.Second {
+			timer := time.NewTimer(delay)
+			defer timer.Stop()
+			select {
+			case <-ctx.Done():
+				return agent.Draft{}, ctx.Err()
+			case <-timer.C:
+				_, err = m.runFor(ctx, realProfile, completeGuide)
+			}
+		}
+	}
 	if errors.As(err, &unavailable) && unavailable.cause == nil && unavailable.RetryAt.IsZero() {
 		for _, profile := range m.Snapshot().Profiles {
 			switch profile.Status {

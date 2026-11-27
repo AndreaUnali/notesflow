@@ -54,12 +54,17 @@ type Manager struct {
 	profiles []config.Profile
 	mu       sync.Mutex
 	state    persisted
+
+	delegations     int
+	delegationsDone chan struct{}
+	inferences      map[*inferenceRun]struct{}
 }
 
 type requestError struct {
-	message string
-	retryAt time.Time
-	status  int
+	message  string
+	retryAt  time.Time
+	status   int
+	openCode bool
 }
 
 func (e *requestError) Error() string { return e.message }
@@ -168,7 +173,7 @@ func (m *Manager) runFor(ctx context.Context, eligible func(config.Profile) bool
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
-		if saveErr := m.finish(profile, err); saveErr != nil {
+		if saveErr := m.finish(ctx, profile, err); saveErr != nil {
 			return "", saveErr
 		}
 		if err == nil {
@@ -203,9 +208,12 @@ func (m *Manager) reserve(profile config.Profile) (bool, error) {
 	return true, m.commit(next)
 }
 
-func (m *Manager) finish(profile config.Profile, err error) error {
+func (m *Manager) finish(ctx context.Context, profile config.Profile, err error) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	next := m.state
 	now := time.Now()
 	switch {

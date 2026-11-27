@@ -195,17 +195,17 @@ func (m *setup) activate() tea.Cmd {
 	case setupConnection:
 		switch m.cursor {
 		case 0:
-			m.connection = config.Profile{ID: "opencode", Driver: "opencode"}
-			m.filter = ""
-			m.goTo(setupCatalog)
-			return m.listModels()
-		case 1:
 			m.connection = config.Profile{ID: "api", Driver: "openai-compatible"}
 			if m.settings.Profile != nil && m.settings.Profile.Driver == m.connection.Driver {
 				m.connection = *m.settings.Profile
 				m.connection.LocalKey = m.settings.APIKey
 			}
 			m.goTo(setupAPI)
+		case 1:
+			m.connection = config.Profile{ID: "opencode", Driver: "opencode"}
+			m.filter = ""
+			m.goTo(setupCatalog)
+			return m.listModels()
 		case 2:
 			return m.save()
 		}
@@ -325,16 +325,25 @@ func (m setup) content() (title, detail string, rows []string) {
 			"Collegamento ai modelli",
 		}
 	case setupConnection:
-		first, later := "OpenCode · controlla l’harness e i modelli", "Configura più tardi"
+		openCode, later := "OpenCode · controlla l’harness e i modelli", "Configura più tardi"
 		if _, err := exec.LookPath("opencode"); err != nil {
-			first = "OpenCode · da installare"
+			openCode = "OpenCode · da installare"
 		}
 		if m.settings.Profile != nil {
 			later = "Tieni il modello configurato · " + m.settings.Profile.Model
 		}
-		return "Collegamento ai modelli", "Scegli OpenCode oppure collega direttamente un provider API.", []string{first, "Provider compatibile con OpenAI · inserisci la chiave", later}
+		return "Collegamento ai modelli", "Collega il provider per usare i modelli in Notesflow.", []string{
+			"API diretta · provider compatibile con OpenAI", openCode, later,
+		}
 	case setupAPI:
 		key := strings.Repeat("•", min(len(m.connection.LocalKey), 16))
+		if key == "" && m.connection.APIKeyEnv != "" {
+			if m.connection.APIKey() == "" {
+				key = "variabile assente · " + m.connection.APIKeyEnv
+			} else {
+				key = "da " + m.connection.APIKeyEnv
+			}
+		}
 		return "Provider API", "La chiave viene salvata nel file privato delle impostazioni utente.", []string{
 			"URL base del provider · " + m.connection.BaseURL,
 			"Chiave API · " + key,

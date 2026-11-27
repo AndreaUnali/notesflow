@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/AndreaUnali/notesflow/internal/agent"
 )
 
 const openCodeTimeout = 90 * time.Second
@@ -28,8 +30,9 @@ type openCodeFault struct {
 	Message    string
 	StatusCode int
 	Data       struct {
-		Message    string
-		StatusCode int
+		Message         string
+		StatusCode      int
+		ResponseHeaders map[string]string
 	}
 }
 
@@ -41,6 +44,15 @@ func openCode(ctx context.Context, model, prompt string) (string, error) {
 // A recovered turn can have both text and a CLI error. The caller must validate
 // the text before using it in that case.
 func runOpenCode(ctx context.Context, model, prompt string, timeout time.Duration) (string, error) {
+	var total int
+	var seen, missing bool
+	defer func() {
+		if seen && !missing {
+			agent.ReportTokens(ctx, &total)
+		} else {
+			agent.ReportTokens(ctx, nil)
+		}
+	}()
 	path, err := exec.LookPath("opencode")
 	if err != nil {
 		return "", &guidedError{"OpenCode non è disponibile nel PATH.", "Installa OpenCode oppure configura un profilo LLM in notesflow.json."}
@@ -82,14 +94,24 @@ func runOpenCode(ctx context.Context, model, prompt string, timeout time.Duratio
 	scanner.Buffer(make([]byte, 4096), 1<<20)
 	for scanner.Scan() {
 		var event struct {
-			Type  string
-			Part  struct{ Text string }
+			Type string
+			Part struct {
+				Text   string
+				Tokens struct{ Total *int }
+			}
 			Error json.RawMessage
 		}
 		if json.Unmarshal(scanner.Bytes(), &event) != nil {
 			continue
 		}
 		switch event.Type {
+		case "step_finish":
+			seen = true
+			if event.Part.Tokens.Total != nil {
+				total += *event.Part.Tokens.Total
+			} else {
+				missing = true
+			}
 		case "step_start":
 			restarted = eventError
 		case "text":
@@ -128,6 +150,19 @@ func runOpenCode(ctx context.Context, model, prompt string, timeout time.Duratio
 		return "", ctx.Err()
 	case oversized || scanner.Err() == bufio.ErrTooLong:
 		return "", &guidedError{"La risposta di OpenCode supera il limite di lettura.", "Riduci la sezione o l’intervallo di pagine e riprova."}
+	case status == 429:
+		var retry time.Time
+		for header, value := range fault.Data.ResponseHeaders {
+			if strings.EqualFold(header, "Retry-After") {
+				retry = retryAfter(value)
+				break
+			}
+		}
+		if !retry.After(time.Now()) {
+			retry = time.Now().Add(time.Minute)
+		}
+		cause, _ := statusDiagnosis(status, true)
+		return retriedAnswer, &requestError{message: cause, retryAt: retry, status: status, openCode: true}
 	case status >= 400:
 		cause, help := statusDiagnosis(status, true)
 		return retriedAnswer, &guidedError{cause, help}

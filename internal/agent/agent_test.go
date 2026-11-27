@@ -152,8 +152,10 @@ done
 		if len(request.Sources) != 3 {
 			t.Fatalf("expected 3 decks, got %d", len(request.Sources))
 		}
+		total := 0
 		for _, source := range request.Sources {
-			if len(source.Text) > maxSourceBytes/3 || !utf8.ValidString(source.Text) {
+			total += len(source.Text)
+			if len(source.Text) > maxSourceBytes || !utf8.ValidString(source.Text) {
 				t.Fatalf("invalid consolidated source %s", source.File)
 			}
 			for page := 1; page <= 64; page++ {
@@ -161,6 +163,9 @@ done
 					t.Errorf("%s missing page %d", source.File, page)
 				}
 			}
+		}
+		if total > maxSourceBytes {
+			t.Fatalf("source text used %d bytes", total)
 		}
 		return Draft{Summary: "Risposta"}, nil
 	})
@@ -176,5 +181,44 @@ done
 	rangeRef.Last = 65
 	if _, err := readMaterials(t.Context(), root, []Ref{rangeRef}); err == nil || !strings.Contains(err.Error(), "64 pagine") {
 		t.Fatalf("unexpected out-of-range result: %v", err)
+	}
+}
+
+func TestSourcesThatFitTogetherGoStraightToDelegation(t *testing.T) {
+	materials := []Material{
+		{Ref: Ref{File: "base.pdf"}, Text: strings.Repeat("a", 24214)},
+		{Ref: Ref{File: "multicycle.pdf"}, Text: strings.Repeat("b", 8662)},
+		{Ref: Ref{File: "exceptions.pdf"}, Text: strings.Repeat("c", 10853)},
+		{Ref: Ref{File: "roadmap.md"}, Text: strings.Repeat("d", 11698)},
+	}
+	backend := guideFunc(func(_ context.Context, request Request) (Draft, error) {
+		t.Fatal("the sources fit in the delegation and should not be summarized")
+		return Draft{}, nil
+	})
+	if err := condenseSources(t.Context(), backend, Job{}, materials); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCondensePreservesShortSourcesWhenOneDeckNeedsReading(t *testing.T) {
+	materials := []Material{
+		{Ref: Ref{File: "base.pdf"}, Text: strings.Repeat("a", 31600)},
+		{Ref: Ref{File: "multicycle.pdf"}, Text: strings.Repeat("b", 12662)},
+		{Ref: Ref{File: "exceptions.pdf"}, Text: strings.Repeat("c", 12853)},
+		{Ref: Ref{File: "roadmap.md"}, Text: strings.Repeat("d", 11698)},
+	}
+	calls := 0
+	backend := guideFunc(func(_ context.Context, request Request) (Draft, error) {
+		calls++
+		if len(request.Sources) != 1 || request.Sources[0] != materials[0] || request.ReadingBytes != 26787 {
+			t.Fatalf("unexpected source reading: %d sources, %d-byte budget", len(request.Sources), request.ReadingBytes)
+		}
+		return Draft{Summary: "Appunti"}, nil
+	})
+	if err := condenseSources(t.Context(), backend, Job{}, materials); err != nil || calls != 1 {
+		t.Fatalf("calls %d, error %v", calls, err)
+	}
+	if materials[0].Text != "Appunti" || len(materials[3].Text) != 11698 {
+		t.Fatal("only the largest deck should have been condensed")
 	}
 }

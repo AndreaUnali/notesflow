@@ -256,6 +256,7 @@ func (m Model) pdfRows() []string {
 
 type compiled struct {
 	file string
+	job  int
 	err  error
 }
 
@@ -266,16 +267,22 @@ func (m *Model) compile() tea.Cmd {
 			return nil
 		}
 	}
-	return m.compileFile(m.mainTeX())
+	return m.compileFile(m.mainTeX(), 0)
 }
 
-func (m *Model) compileFile(file string) tea.Cmd {
+func (m *Model) compileFile(file string, jobID int) tea.Cmd {
 	if m.compiling {
 		return nil
 	}
 	if file == "" {
 		m.message = "Imposta tools.main_tex per scegliere il documento principale"
 		return nil
+	}
+	if jobID != 0 {
+		if job, ok := m.agents.book.Lookup(jobID); ok {
+			job.BeginEvent("Aggiornamento del PDF", time.Now())
+			m.saveAgent(job)
+		}
 	}
 	m.compiling = true
 	m.message = "Compilazione " + file + "…"
@@ -286,6 +293,6 @@ func (m *Model) compileFile(file string) tea.Cmd {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			err = errors.New("compilazione oltre 90 secondi")
 		}
-		return compiled{out, err}
+		return compiled{out, jobID, err}
 	}
 }

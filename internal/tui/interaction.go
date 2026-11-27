@@ -105,6 +105,22 @@ func (m *Model) mouse(event tea.MouseEvent) tea.Cmd {
 		m.editorMouse(event, main)
 		return nil
 	}
+	if m.tab == activityTab && main.contains(event.X, event.Y) {
+		switch event.Button {
+		case tea.MouseButtonWheelDown, tea.MouseButtonWheelUp:
+			delta := 3
+			if event.Button == tea.MouseButtonWheelUp {
+				delta = -delta
+			}
+			m.focus = mainFocus
+			if job, ok := m.selectedAgentJob(); ok {
+				m.scrollActivity(job, delta)
+			} else {
+				m.cursor = max(0, min(m.cursor+delta, len(m.rows())-1))
+			}
+			return nil
+		}
+	}
 	pdf := m.pdfRect()
 	pdfBox := cellRect{pdf.x - 1, pdf.y - 2, pdf.cols + 2, l.pdf}
 	if pdfBox.contains(event.X, event.Y) {

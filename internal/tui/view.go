@@ -136,12 +136,18 @@ func (m Model) View() string {
 			}
 		case m.tab == activityTab:
 			title = "Attività"
-			if job, ok := m.selectedAgentJob(); ok {
-				title += " · " + job.Target.Title
-				lines := m.agentDetailLines(job, width)
-				main = lines[min(m.agents.offset, max(0, len(lines)-1)):]
-			} else {
+			switch {
+			case m.agents.log:
+				title = "Registro tecnico"
 				main = m.listRows(height)
+			case m.agents.detail != 0:
+				if job, ok := m.selectedAgentJob(); ok {
+					lines := m.agentDetailLines(job, width)
+					last := max(0, len(lines)-height)
+					main = lines[min(m.agents.offset, last):]
+				}
+			default:
+				main = m.activityRows(width, height)
 			}
 		case m.tab == apiTab:
 			title = "Dashboard API"
@@ -402,8 +408,14 @@ func (m Model) help() string {
 		return " / Cerca · ↑↓ Nodi · Invio entra/apri · Esc torna · Pg↑/Pg↓ pagina · f Filtra · +/− zoom"
 	case m.tab == todoTab:
 		return " ↑↓ Scorri · f Tipo · s Riepilogo · v Lista · Invio Apri"
-	case m.tab == activityTab && m.agents.detail != 0 && m.agents.book != nil:
-		return m.foldAgentHelp()
+	case m.tab == activityTab:
+		if m.agents.log {
+			return " ↑↓ Leggi · Esc Attività"
+		}
+		if m.agents.detail != 0 && m.agents.book != nil {
+			return m.foldAgentHelp()
+		}
+		return " ↑↓ Scorri · Invio Apri · l Registro tecnico"
 	default:
 		return " ↑↓ Scorri · Invio Seleziona · Shift+Tab Naviga"
 	}

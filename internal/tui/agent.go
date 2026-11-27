@@ -26,6 +26,8 @@ type agentUI struct {
 	offset   int
 	notice   agentNotice
 	queued   []agentNotice
+	log      bool
+	graphJob int
 }
 
 type agentRun struct {
@@ -34,12 +36,19 @@ type agentRun struct {
 	preparing bool
 }
 
-type agentPrepared struct{ id, token int }
+type agentPrepared struct {
+	id, token int
+	at        time.Time
+	tokens    *int
+}
 
 type agentResult struct {
 	id, token int
 	result    agent.Draft
 	err       error
+	at        time.Time
+	tokens    *int
+	prepared  agentPrepared
 }
 
 type appliedAgent struct {
@@ -78,6 +87,13 @@ func (m *Model) beginAgent(job agent.Job) tea.Cmd {
 	job.State, job.Error, job.PauseReason, job.ErrorHelp = agent.Working, "", "", ""
 	job.Result.Question, job.Deadline = nil, time.Time{}
 	job.Sources = agent.SourcesFor(m.root, job)
+	now := time.Now()
+	job.FinishEvent(agent.Paused, now, nil, "Avviato un nuovo tentativo.")
+	if len(job.Sources) > 0 {
+		job.BeginEvent("Lettura delle fonti", now)
+	} else {
+		job.BeginEvent(agentModelStep(job), now)
+	}
 	if !m.saveAgent(job) {
 		return nil
 	}
@@ -100,19 +116,29 @@ func (m *Model) beginAgent(job agent.Job) tea.Cmd {
 	preparing := len(job.Sources) > 0
 	m.agents.running[job.ID] = agentRun{token: token, cancel: cancel, preparing: preparing}
 	root, backend := m.root, m.manager
-	prepared := make(chan struct{}, 1)
+	prepared := make(chan agentPrepared, 1)
 	work := func() tea.Msg {
 		defer cancel()
 		defer close(prepared)
-		result, err := agent.Run(ctx, root, backend, job, func() { prepared <- struct{}{} })
-		return agentResult{id: job.ID, token: token, result: result, err: err}
+		finish := backend.BeginDelegation()
+		defer finish()
+		ctx, meter := agent.MeasureTokens(ctx)
+		var report agentPrepared
+		result, err := agent.Run(ctx, root, backend, job, func() {
+			if preparing {
+				report = agentPrepared{job.ID, token, time.Now(), meter.Take()}
+				prepared <- report
+			}
+		})
+		return agentResult{id: job.ID, token: token, result: result, err: err,
+			at: time.Now(), tokens: meter.Take(), prepared: report}
 	}
 	if !preparing {
 		return work
 	}
 	return tea.Batch(work, func() tea.Msg {
-		if _, ok := <-prepared; ok {
-			return agentPrepared{job.ID, token}
+		if report, ok := <-prepared; ok {
+			return report
 		}
 		return nil
 	})
@@ -130,11 +156,33 @@ func (m *Model) saveAgent(job agent.Job) bool {
 	return true
 }
 
+func agentModelStep(job agent.Job) string {
+	if job.Write {
+		return "Preparazione della proposta"
+	}
+	return "Preparazione della risposta"
+}
+
+func (m *Model) markAgentPrepared(report agentPrepared) {
+	run, ok := m.agents.running[report.id]
+	if !ok || run.token != report.token || !run.preparing {
+		return
+	}
+	run.preparing = false
+	m.agents.running[report.id] = run
+	if job, ok := m.agents.book.Lookup(report.id); ok && !report.at.IsZero() {
+		job.FinishEvent(agent.Completed, report.at, report.tokens, "")
+		job.BeginEvent(agentModelStep(job), report.at)
+		m.saveAgent(job)
+	}
+}
+
 func (m *Model) finishAgent(result agentResult) {
 	run, exists := m.agents.running[result.id]
 	if !exists || run.token != result.token {
 		return
 	}
+	m.markAgentPrepared(result.prepared)
 	delete(m.agents.running, result.id)
 	job, ok := m.agents.book.Lookup(result.id)
 	if !ok {
@@ -147,6 +195,7 @@ func (m *Model) finishAgent(result agentResult) {
 		if errors.As(result.err, &source) {
 			job.ErrorHelp = "Controlla il file nella sezione Fonti e riprova con Invio. Per cambiare l’intervallo di pagine, selezionalo in una nuova delega."
 		}
+		job.FinishEvent(agent.Failed, result.at, result.tokens, job.Error)
 		if m.saveAgent(job) {
 			if m.agents.detail == job.ID {
 				m.agents.offset = 0
@@ -155,11 +204,13 @@ func (m *Model) finishAgent(result agentResult) {
 		}
 		return
 	}
+	job.FinishEvent(agent.Completed, result.at, result.tokens, "")
 	job.Result = result.result
 	job.History = append(slices.Clone(job.History), agent.Turn{Role: "assistant", Text: job.Result.Summary})
 	switch {
 	case job.Result.Question != nil && job.Write:
 		job.State, job.Deadline = agent.Waiting, time.Time{}
+		job.BeginEvent("Attesa della risposta", result.at)
 	case job.Write:
 		job.State = agent.Ready
 	default:
@@ -203,6 +254,9 @@ func (m *Model) advanceAgent(now time.Time) tea.Cmd {
 			continue
 		}
 		if job.Deadline.IsZero() && m.agents.notice.id == 0 && (m.course == "" || job.Course == m.course) {
+			if len(job.Events) == 0 || job.Events[len(job.Events)-1].State != agent.Working {
+				job.BeginEvent("Attesa della risposta", now)
+			}
 			job.Deadline = now.Add(m.questionDuration())
 			if m.saveAgent(job) {
 				m.toastAgent(job.ID, "Agente · domanda", job.Result.Question.Text, true)
@@ -240,6 +294,11 @@ func (m *Model) answerAgent(job agent.Job, index int, automatic bool) tea.Cmd {
 	job.History = append(slices.Clone(job.History), agent.Turn{Role: "user", Text: job.Decision})
 	job.Deadline = time.Time{}
 	job.Result.Question = nil
+	label := "Risposta dell’utente"
+	if automatic {
+		label = "Scelta automatica"
+	}
+	job.FinishEvent(agent.Completed, time.Now(), nil, label+" · "+job.Decision)
 	if m.agents.notice.id == job.ID {
 		m.agents.notice = agentNotice{}
 	}
@@ -252,6 +311,14 @@ func (m *Model) answerAgent(job agent.Job, index int, automatic bool) tea.Cmd {
 }
 
 func (m *Model) applyAgent(job agent.Job) tea.Cmd {
+	label := "Applicazione agli appunti"
+	if job.Todo != nil {
+		label = "Verifica LaTeX e applicazione"
+	}
+	job.BeginEvent(label, time.Now())
+	if !m.saveAgent(job) {
+		return nil
+	}
 	m.agents.applying = job.ID
 	e, ctx, root := m.editor, m.ctx, m.root
 	if job.Todo != nil {
@@ -305,6 +372,7 @@ func (m *Model) appliedAgent(result appliedAgent) {
 	}
 	if result.err != nil {
 		job.State, job.Error = agent.Review, result.err.Error()
+		job.FinishEvent(agent.Failed, time.Now(), nil, job.Error)
 		if m.saveAgent(job) {
 			m.toastAgent(job.ID, "Agente · proposta da rivedere", job.Target.Title, false)
 		}
@@ -316,6 +384,7 @@ func (m *Model) appliedAgent(result appliedAgent) {
 		job.BufferedHash = m.store.Hashes()[job.Target.File]
 		job.Error = "Modifiche integrate nel buffer di Neovim. Usa :w per salvarle insieme alle tue."
 	}
+	job.FinishEvent(agent.Completed, time.Now(), nil, job.Error)
 	if m.saveAgent(job) {
 		extra := ""
 		if count := len(job.Result.Visuals); count > 0 {
@@ -334,11 +403,12 @@ func (m *Model) appliedAgent(result appliedAgent) {
 }
 
 func (m *Model) pauseAgent(job agent.Job) {
-	if job.State != agent.Working && job.State != agent.Waiting {
+	if job.Kind != "" || job.State != agent.Working && job.State != agent.Waiting {
 		return
 	}
 	job.State, job.Deadline = agent.Paused, time.Time{}
 	job.PauseReason = agent.ManualPause
+	job.FinishEvent(agent.Paused, time.Now(), nil, job.PauseReason)
 	if !m.saveAgent(job) {
 		return
 	}
@@ -354,10 +424,11 @@ func (m *Model) pauseAgent(job agent.Job) {
 func (m *Model) resumeAgent(job agent.Job) tea.Cmd {
 	if job.State == agent.Paused && job.Result.Question != nil && job.Decision == "" {
 		job.State, job.PauseReason = agent.Waiting, ""
+		job.BeginEvent("Attesa della risposta", time.Now())
 		m.saveAgent(job)
 		return nil
 	}
-	if job.State == agent.Paused || job.State == agent.Failed {
+	if job.Kind == "" && (job.State == agent.Paused || job.State == agent.Failed) {
 		return m.beginAgent(job)
 	}
 	return nil
@@ -402,6 +473,9 @@ func (m Model) currentAgentJob() agent.Job {
 		case agent.Paused, agent.Failed, agent.Review:
 			priority = 1
 		}
+		if job.Kind == agent.GraphActivity {
+			priority--
+		}
 		if priority > best {
 			best, current = priority, job
 		}
@@ -438,6 +512,9 @@ func (m *Model) openCurrentAgent() tea.Cmd {
 func (m *Model) openAgentActivity(id int) tea.Cmd {
 	cmd := m.setTab(activityTab)
 	m.agents.detail, m.agents.offset = id, 0
+	if i := slices.IndexFunc(m.agentTasks(), func(job agent.Job) bool { return job.ID == id }); i >= 0 {
+		m.cursor = i
+	}
 	if m.agents.notice.id == id && !m.agents.notice.question {
 		m.agents.notice = agentNotice{}
 	}
@@ -455,14 +532,14 @@ func (m *Model) agentDetailKey(key string) (tea.Cmd, bool) {
 	switch key {
 	case "esc":
 		m.agents.detail, m.agents.offset = 0, 0
-	case "up":
-		m.agents.offset = max(0, m.agents.offset-1)
-	case "down":
-		m.agents.offset = min(m.agents.offset+1, max(0, len(m.agentDetailLines(job, m.layout().left-2))-1))
+	case "up", "k":
+		m.scrollActivity(job, -1)
+	case "down", "j":
+		m.scrollActivity(job, 1)
 	case "pgup":
-		m.agents.offset = max(0, m.agents.offset-max(1, m.layout().body-4))
+		m.scrollActivity(job, -max(1, m.layout().body-4))
 	case "pgdown":
-		m.agents.offset = min(m.agents.offset+max(1, m.layout().body-4), max(0, len(m.agentDetailLines(job, m.layout().left-2))-1))
+		m.scrollActivity(job, max(1, m.layout().body-4))
 	case "a", "b", "c":
 		if job.State == agent.Waiting {
 			return m.answerAgent(job, int(key[0]-'a'), false), true
@@ -474,10 +551,19 @@ func (m *Model) agentDetailKey(key string) (tea.Cmd, bool) {
 		// A detail page must not forward Enter to the row behind it.
 		return m.resumeAgent(job), true
 	case "f":
+		if job.Kind != "" {
+			return nil, true
+		}
 		m.showAgentForm("followup", job.ID, job.Target.File, job.Target.Line)
 	case "s":
+		if job.Kind != "" {
+			return nil, true
+		}
 		m.showAgentForm("source", job.ID, job.Target.File, job.Target.Line)
 	case "e":
+		if job.Target.File == "" {
+			return nil, true
+		}
 		return m.openEditor(source{job.Target.File, max(job.Target.Line, job.Applied)}), true
 	case "w":
 		if !job.Write && job.State == agent.Answered {
@@ -492,46 +578,18 @@ func (m *Model) agentDetailKey(key string) (tea.Cmd, bool) {
 }
 
 func (m Model) agentDetailLines(job agent.Job, width int) []string {
-	var lines []string
+	lines := m.activityOverview(job, width)
+	lines = append(lines, m.activityHistory(job, width)...)
+	if job.Kind == agent.GraphActivity || job.Kind == agent.SummaryActivity && job.Result.Summary == "" {
+		return lines
+	}
 	add := func(text string) {
 		for row := range strings.SplitSeq(text, "\n") {
-			lines = append(lines, foldLine(clean(row), width)...)
+			lines = append(lines, foldLine("  "+clean(row), width)...)
 		}
 	}
-	phase := m.agentPhase(job)
-	if !job.Updated.IsZero() {
-		last := "Aggiornata alle " + job.Updated.Local().Format("15:04:05")
-		if job.State == agent.Working {
-			last = "Da " + max(0, time.Since(job.Updated)).Truncate(time.Second).String()
-		}
-		phase += " · " + last
-	}
-	add(phase)
-	if job.State == agent.Failed {
-		add("Causa · " + job.Error)
-		help := job.ErrorHelp
-		if help == "" {
-			help = "Premi Invio per un nuovo tentativo."
-			if strings.Contains(job.Error, "OpenCode run fallito") {
-				help = "Premi Invio per riprovare con la nuova diagnostica. Se usi un router locale, controlla la disponibilità del modello in OpenCode."
-			}
-		}
-		add("Come risolvere · " + help)
-		add("")
-	}
-	if job.State == agent.Paused {
-		if job.PauseReason != "" {
-			add(job.PauseReason)
-		}
-		add("Invio riprende la delega.")
-	}
-	add(fmt.Sprintf("%s:%d · %s", job.Target.File, max(job.Target.Line, job.Applied), job.Target.Title))
-	add(job.Goal)
-	if len(job.Sources) > 0 {
-		add("Fonti")
-		for _, source := range job.Sources {
-			add("  " + source.String())
-		}
+	if job.Decision != "" || job.Result.Question != nil || job.Result.Summary != "" || job.Result.Text != "" {
+		lines = append(lines, "", activityDivider("Esito", width))
 	}
 	if job.Decision != "" {
 		mark := "Risposta"
@@ -539,9 +597,6 @@ func (m Model) agentDetailLines(job agent.Job, width int) []string {
 			mark = "Scelta automatica"
 		}
 		add(mark + " · " + job.Decision + " · " + job.DecisionWhy)
-	}
-	if job.Error != "" && job.State != agent.Failed {
-		add(job.Error)
 	}
 	if job.State == agent.Waiting && job.Result.Question != nil {
 		q := job.Result.Question
@@ -593,6 +648,9 @@ func (m Model) foldAgentHelp() string {
 	job, ok := m.agents.book.Lookup(m.agents.detail)
 	if !ok {
 		return ""
+	}
+	if job.Kind != "" {
+		return " ↑↓ Leggi · Pg↑/Pg↓ Pagina · Esc Lista"
 	}
 	switch job.State {
 	case agent.Waiting:

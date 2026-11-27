@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,4 +99,27 @@ func fakeOpenCode(t *testing.T, script string) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func TestOpenCodeActivityUsesReportedUsage(t *testing.T) {
+	fakeOpenCode(t, `printf '%s\n' '{"type":"text","part":{"text":"OK"}}' '{"type":"step_finish","part":{"tokens":{"total":480}}}' '{"type":"step_finish","part":{"tokens":{"total":220}}}'`)
+	ctx, meter := agent.MeasureTokens(t.Context())
+	if _, err := openCode(ctx, "", "test"); err != nil {
+		t.Fatal(err)
+	}
+	if count := meter.Take(); count == nil || *count != 700 {
+		t.Fatalf("wanted total usage for two phases, got %v", count)
+	}
+}
+
+func TestOpenCodeKeepsRetryAfterFromRateLimit(t *testing.T) {
+	fakeOpenCode(t, `printf '%s\n' '{"type":"error","error":{"data":{"statusCode":429,"responseHeaders":{"retry-after":"80"}}}}'`)
+	_, err := openCode(t.Context(), "", "test")
+	var limit *requestError
+	if !errors.As(err, &limit) || limit.status != 429 {
+		t.Fatalf("expected a structured rate limit, got %v", err)
+	}
+	if delay := time.Until(limit.retryAt); delay < 78*time.Second || delay > 80*time.Second {
+		t.Fatalf("unexpected retry delay %v", delay)
+	}
 }

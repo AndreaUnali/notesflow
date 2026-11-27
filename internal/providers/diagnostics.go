@@ -84,7 +84,7 @@ func Explain(err error) (cause, help string) {
 	case errors.As(err, &guided):
 		return err.Error(), guided.help
 	case errors.As(err, &request) && request.status > 0:
-		cause, help = statusDiagnosis(request.status, false)
+		cause, help = statusDiagnosis(request.status, request.openCode)
 		retry := request.retryAt
 		if errors.As(err, &unavailable) && !unavailable.RetryAt.IsZero() {
 			retry = unavailable.RetryAt

@@ -310,8 +310,12 @@ func live(parent context.Context, command, root string, port int, browse bool, c
 	}
 	var workers sync.WaitGroup
 	workers.Go(func() { watch.Run(ctx) })
-	if cfg.Semantic.Enabled {
-		workers.Go(func() { watcher.Analyze(ctx, store, manager, cfg.Semantic.CandidateLimit, cfg.Semantic.DeltaRunes) })
+	startAnalysis := func(report func(watcher.AnalysisActivity)) {
+		if cfg.Semantic.Enabled {
+			workers.Go(func() {
+				watcher.Analyze(ctx, store, manager, cfg.Semantic.CandidateLimit, cfg.Semantic.DeltaRunes, report)
+			})
+		}
 	}
 	if browse {
 		workers.Go(func() {
@@ -324,6 +328,7 @@ func live(parent context.Context, command, root string, port int, browse bool, c
 		})
 	}
 	if command == "serve" {
+		startAnalysis(nil)
 		fmt.Println(url)
 		<-ctx.Done()
 	} else {
@@ -333,8 +338,10 @@ func live(parent context.Context, command, root string, port int, browse bool, c
 			store.Log("Note Network recenti: " + err.Error())
 		}
 		model := tui.New(ctx, root, url, cfg, store, manager).WithSurface(surface).WithSession().WithLaunchNotice(initialNotice)
+		program := tea.NewProgram(model, tea.WithContext(ctx), tea.WithAltScreen(), tea.WithOutput(surface), tea.WithMouseAllMotion(), tea.WithFPS(60))
+		startAnalysis(func(progress watcher.AnalysisActivity) { program.Send(progress) })
 		var result tea.Model
-		result, err = tea.NewProgram(model, tea.WithContext(ctx), tea.WithAltScreen(), tea.WithOutput(surface), tea.WithMouseAllMotion(), tea.WithFPS(60)).Run()
+		result, err = program.Run()
 		if closed, ok := result.(tui.Model); ok {
 			returnToLauncher, editorDone = closed.ReturnToLauncher(), closed.EditorDone()
 		}

@@ -368,7 +368,7 @@ func (m *Model) submitAgentForm() tea.Cmd {
 		}
 		if form.mode == "write" || (form.mode == "followup" && (job.State == agent.Completed || job.State == agent.Review)) {
 			job.ID, job.Decision, job.DecisionWhy, job.Automatic = 0, "", "", false
-			job.Todo = nil
+			job.Todo, job.Events, job.Created = nil, nil, time.Time{}
 			job.Buffered, job.BufferedHash, job.Applied = false, "", 0
 			job.Deadline = time.Time{}
 			job.Write = (form.mode == "write" || (form.mode == "followup" && old.Write))
@@ -382,6 +382,7 @@ func (m *Model) submitAgentForm() tea.Cmd {
 		}
 		if form.mode == "followup" && old.State == agent.Waiting {
 			job.Decision, job.DecisionWhy, job.Automatic = strings.TrimSpace(form.text), "Risposta dell’utente", false
+			job.FinishEvent(agent.Completed, time.Now(), nil, "Risposta dell’utente · "+job.Decision)
 			job.Deadline = time.Time{}
 			if m.agents.notice.id == old.ID {
 				m.agents.notice = agentNotice{}

@@ -165,8 +165,14 @@ func (m Model) briefHelp() string {
 		return "Shift+Tab · :w"
 	case m.tab == graphTab:
 		return "/ Cerca · ↑↓ · Invio"
-	case m.tab == activityTab && m.agents.detail != 0 && m.agents.book != nil:
-		if job, ok := m.selectedAgentJob(); ok {
+	case m.tab == activityTab:
+		if m.agents.log {
+			return "Esc Attività"
+		}
+		if m.agents.detail == 0 {
+			return "Invio Apri · l Registro"
+		}
+		if job, ok := m.selectedAgentJob(); ok && job.Kind == "" {
 			switch job.State {
 			case agent.Paused:
 				return "Invio Riprendi"

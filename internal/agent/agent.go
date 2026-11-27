@@ -86,6 +86,9 @@ type Turn struct {
 
 type Job struct {
 	ID           int
+	Kind         string    `json:",omitempty"`
+	Created      time.Time `json:",omitzero"`
+	Events       []Event   `json:",omitempty"`
 	Course       string
 	Target       Target
 	Goal         string
@@ -140,6 +143,7 @@ func Open(root string) (*Book, error) {
 	}
 	for i := range book.Jobs {
 		job := &book.Jobs[i]
+		job.FinishEvent(Paused, time.Time{}, nil, sessionEnded)
 		if job.State == Working {
 			job.State = Paused
 			job.PauseReason = sessionEnded
@@ -172,6 +176,9 @@ func (b *Book) Store(j Job) error {
 	i := slices.IndexFunc(next, func(other Job) bool { return other.ID == j.ID })
 	if i < 0 {
 		j.ID = 1
+		if j.Created.IsZero() {
+			j.Created = j.Updated
+		}
 		for _, other := range next {
 			j.ID = max(j.ID, other.ID+1)
 		}
@@ -203,7 +210,7 @@ func (b *Book) RecentSources(course string) []Ref {
 func (b *Book) ForCourse(course string) []Job {
 	var jobs []Job
 	for _, job := range b.Jobs {
-		if course == "" || job.Course == course {
+		if course == "" || job.Course == course || job.Kind == GraphActivity {
 			jobs = append(jobs, job)
 		}
 	}
